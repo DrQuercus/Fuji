@@ -38,7 +38,7 @@ from fuji.core.devices import Camera
 from fuji.core.profile import DeviceSpec
 from fuji.core.properties import PropertyInfo, PropertyType
 
-from . import DriverContext, register_driver
+from . import DriverContext, OptionSpec, register_driver
 
 log = logging.getLogger(__name__)
 
@@ -593,6 +593,31 @@ def list_cameras(sdk_path: str | Path | None = None) -> list[dict[str, Any]]:
     return out
 
 
-@register_driver("touptek.camera")
+@register_driver(
+    "touptek.camera",
+    title="Caméra ToupTek",
+    category="Caméras",
+    kind="camera",
+    description="Caméras ToupTek et marques OEM (Amscope, Omegon...) via le SDK officiel toupcam.",
+    options=[
+        OptionSpec(
+            "camera_id", "str", "Caméra", None, help="Nom ou identifiant ; vide = première caméra détectée"
+        ),
+        OptionSpec(
+            "bit_depth",
+            "choice",
+            "Profondeur",
+            12,
+            choices=("8", "12"),
+            help="12 bits : meilleure dynamique pour mesurer",
+        ),
+        OptionSpec(
+            "resolution_index", "int", "Résolution (index)", 0, min=0, max=8, help="0 = pleine résolution"
+        ),
+        OptionSpec(
+            "sdk_path", "dir", "Dossier du SDK", None, advanced=True, help="Par défaut : ~/.fuji/touptek"
+        ),
+    ],
+)
 def _touptek(spec: DeviceSpec, ctx: DriverContext) -> ToupTekCamera:
     return ToupTekCamera(spec.name, label=spec.label, **spec.options)

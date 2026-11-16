@@ -59,6 +59,67 @@ class DeviceSpec(_Model):
     options: dict[str, Any] = Field(default_factory=dict)
 
 
+IMMERSIONS = ("air", "huile", "eau", "glycérol", "silicone")
+CONTRASTS = ("fond clair", "phase", "DIC", "fond noir", "fluorescence", "polarisation")
+CORRECTIONS = (
+    "achromat",
+    "plan-achromat",
+    "fluorite (semi-apo)",
+    "plan-fluor",
+    "apochromat",
+    "plan-apochromat",
+    "autre",
+)
+STANDS = ("droit", "inversé", "stéréo", "macroscope", "autre")
+TUBE_LENGTHS = ("infini", "160 mm", "170 mm", "autre")
+
+
+class InstrumentInfo(_Model):
+    """Le statif et l'optique fixe (informatif, utilisé par les assistants)."""
+
+    manufacturer: str = ""
+    model: str = ""
+    stand: Literal["droit", "inversé", "stéréo", "macroscope", "autre"] = "droit"
+    tube_length: Literal["infini", "160 mm", "170 mm", "autre"] = "infini"
+    eyepiece_magnification: float | None = Field(default=10.0, gt=0)
+    #: Indice de champ des oculaires (mm), gravé sur l'oculaire (ex. 18, 20, 22).
+    field_number_mm: float | None = Field(default=None, gt=0)
+    condenser: str = ""
+    serial_number: str = ""
+    notes: str = ""
+
+
+class FilterSet(_Model):
+    """Cube / bloc de filtres de fluorescence."""
+
+    name: str
+    excitation_nm: float | None = Field(default=None, gt=0)
+    excitation_bandwidth_nm: float | None = Field(default=None, gt=0)
+    dichroic_nm: float | None = Field(default=None, gt=0)
+    emission_nm: float | None = Field(default=None, gt=0)
+    #: Largeur de bande d'émission ; vide = filtre passe-haut (à partir de emission_nm).
+    emission_bandwidth_nm: float | None = Field(default=None, gt=0)
+    fluorophores: list[str] = Field(default_factory=list)
+    notes: str = ""
+
+    @property
+    def summary(self) -> str:
+        """Résumé lisible, ex. « Ex 470/40 · DM 495 · Em 525/50 »."""
+
+        def band(center: float | None, width: float | None, longpass: bool = False) -> str:
+            if center is None:
+                return "?"
+            if width:
+                return f"{center:g}/{width:g}"
+            return f"LP {center:g}" if longpass else f"{center:g}"
+
+        parts = [f"Ex {band(self.excitation_nm, self.excitation_bandwidth_nm)}"]
+        if self.dichroic_nm:
+            parts.append(f"DM {self.dichroic_nm:g}")
+        parts.append(f"Em {band(self.emission_nm, self.emission_bandwidth_nm, longpass=True)}")
+        return " · ".join(parts)
+
+
 class Objective(_Model):
     label: str
     magnification: float = Field(gt=0)
@@ -68,11 +129,34 @@ class Objective(_Model):
     contrast: Literal["fond clair", "phase", "DIC", "fond noir", "fluorescence", "polarisation"] = (
         "fond clair"
     )
-    working_distance_mm: float | None = None
+    correction: (
+        Literal[
+            "achromat",
+            "plan-achromat",
+            "fluorite (semi-apo)",
+            "plan-fluor",
+            "apochromat",
+            "plan-apochromat",
+            "autre",
+        ]
+        | None
+    ) = None
+    working_distance_mm: float | None = Field(default=None, gt=0)
+    #: Épaisseur de lamelle prévue (mm) ; 0 = sans lamelle.
+    coverslip_mm: float | None = Field(default=None, ge=0)
+    #: Anneau de phase (Ph1, Ph2, Ph3) pour le contraste de phase.
+    phase_ring: str = ""
     #: Taille du pixel calibrée (µm/pixel), mesurée avec un micromètre objet.
     #: Si absente, elle est estimée à partir de la caméra et du grossissement.
     pixel_size_um: float | None = Field(default=None, gt=0)
+    #: Décalage de mise au point par rapport aux autres objectifs (parfocalité), en µm.
+    parfocal_offset_um: float = 0.0
     notes: str = ""
+
+    @property
+    def resolution_um(self) -> float:
+        """Résolution latérale de Rayleigh à 550 nm (0,61 λ / ON)."""
+        return 0.61 * 0.55 / self.na
 
 
 class LightSetting(_Model):
@@ -97,6 +181,8 @@ class ChannelPreset(_Model):
     mm_config: tuple[str, str] | None = None
     #: Table de couleurs d'affichage (nom napari : gray, green, magenta, cyan...).
     color: str = "gray"
+    #: Cube de filtres utilisé (nom d'un ``filter_sets`` du profil).
+    filter_set: str | None = None
     excitation_nm: float | None = None
     emission_nm: float | None = None
 
@@ -114,11 +200,13 @@ class Roles(_Model):
 class MicroscopeProfile(_Model):
     name: str
     description: str = ""
+    instrument: InstrumentInfo = Field(default_factory=InstrumentInfo)
     devices: list[DeviceSpec] = Field(default_factory=list)
     roles: Roles = Field(default_factory=Roles)
     #: Grossissement de l'adaptateur caméra (monture C 0.5x, 0.63x, 1x...).
     camera_adapter_magnification: float = Field(default=1.0, gt=0)
     objectives: list[Objective] = Field(default_factory=list)
+    filter_sets: list[FilterSet] = Field(default_factory=list)
     channels: list[ChannelPreset] = Field(default_factory=list)
     default_channel: str | None = None
     #: Ouverture numérique maximale du condenseur (pour l'assistant Köhler).
@@ -139,7 +227,68 @@ class MicroscopeProfile(_Model):
             raise ValueError("Deux canaux portent le même nom")
         if self.default_channel and self.default_channel not in chans:
             raise ValueError(f"Canal par défaut inconnu : {self.default_channel!r}")
+        sets = [f.name for f in self.filter_sets]
+        if len(set(sets)) != len(sets):
+            raise ValueError("Deux cubes de filtres portent le même nom")
         return self
+
+    def check(self) -> list[str]:
+        """Problèmes de cohérence (sans bloquer l'enregistrement) : rôles, références..."""
+        from fuji.drivers import driver_info
+
+        issues: list[str] = []
+        devices = {d.name: d for d in self.devices}
+        has_mm = any(d.driver == "micromanager" for d in self.devices)
+        kinds = {}
+        for d in self.devices:
+            info = driver_info(d.driver)
+            if info is None:
+                issues.append(f"Périphérique « {d.name} » : pilote inconnu « {d.driver} ».")
+                continue
+            kinds[d.name] = info.kind
+            known = {o.name for o in info.options}
+            extra = set(d.options) - known
+            if info.options and extra and d.driver != "micromanager":
+                issues.append(f"Périphérique « {d.name} » : options inconnues {sorted(extra)}.")
+        for d in self.devices:
+            if d.driver in ("manual.state", "demo.state") and not d.options.get("labels"):
+                if self.roles.objective_changer != d.name and not d.name.lower().startswith("obj"):
+                    issues.append(f"« {d.name} » : positions non définies (option « Positions »).")
+                elif not self.objectives:
+                    issues.append(f"« {d.name} » : revolver sans objectif (onglet Objectifs).")
+        expected = {
+            "camera": "camera",
+            "xy_stage": "xy_stage",
+            "focus": "focus",
+            "objective_changer": "state",
+            "transmitted_light": "light_source",
+        }
+        for role, kind in expected.items():
+            name = getattr(self.roles, role)
+            if not name:
+                continue
+            if name not in devices:
+                if not has_mm:
+                    issues.append(f"Rôle « {role} » : périphérique « {name} » inexistant.")
+            elif kinds.get(name) not in (kind, None):
+                issues.append(f"Rôle « {role} » : « {name} » n'est pas du bon type ({kinds.get(name)}).")
+        if not any(k == "camera" for k in kinds.values()) and not has_mm:
+            issues.append("Aucune caméra : la capture et le live seront indisponibles.")
+        sets = {f.name for f in self.filter_sets}
+        for ch in self.channels:
+            for dev in [*ch.states, *ch.lights, *ch.shutters]:
+                if dev not in devices and not has_mm:
+                    issues.append(f"Canal « {ch.name} » : périphérique « {dev} » inexistant.")
+            for dev, label in ch.states.items():
+                spec = devices.get(dev)
+                labels = (spec.options.get("labels") if spec else None) or (
+                    [o.label for o in self.objectives] if dev == self.roles.objective_changer else None
+                )
+                if labels and label not in labels:
+                    issues.append(f"Canal « {ch.name} » : « {label} » n'est pas une position de {dev}.")
+            if ch.filter_set and ch.filter_set not in sets:
+                issues.append(f"Canal « {ch.name} » : cube « {ch.filter_set} » inexistant.")
+        return issues
 
     # utilitaires ---------------------------------------------------------------
     def objective(self, label: str) -> Objective | None:

@@ -9,6 +9,44 @@ interface propre qui s'adapte au microscope.
 
 ![Interface de Fuji : assistant Köhler sur le microscope simulé](docs/interface.png)
 
+## L'interface
+
+- **Barre de navigation** à gauche : Contrôle, Assistants, Acquisition, Analyse,
+  Calques, Microscope (configuration), Réglages. Recliquer sur la section active
+  replie le panneau pour agrandir l'image.
+- **Barre rapide** sous l'image : exposition (curseur logarithmique + auto),
+  gain, objectif et canal en un clic, **histogramme en direct** avec alerte de
+  saturation.
+- **Barre supérieure** : choix du microscope (changement à chaud), Live, Capture,
+  mode expert, thème clair / sombre.
+- **Thèmes** : sombre ou clair, 7 couleurs d'accent, 3 tailles de texte
+  (Réglages → Apparence). Raccourcis : Ctrl+L live, Ctrl+K capture, Ctrl+1…7
+  sections, Ctrl+B replier le panneau, Ctrl+E modifier le microscope.
+
+![Thème clair, accent turquoise](docs/interface-clair.png)
+
+## Configurer un microscope
+
+Section **Microscope** → « Modifier la configuration… » ou « Nouveau microscope… »
+(modèles : microscope manuel + ToupTek, manuel avec fluorescence, Micro-Manager,
+simulé, vide, copie de l'actuel). L'éditeur couvre **tout** le profil :
+
+| Page | Contenu |
+|---|---|
+| Général | nom, description, adaptateur caméra, ON du condenseur, dossier, canal au démarrage |
+| Statif et optique | fabricant, modèle, droit/inversé, longueur de tube, oculaires, indice de champ, condenseur ; champ, résolution et profondeur de champ calculés par objectif |
+| Périphériques | ajout par catégorie (caméras, platines, tourelles, éclairage, systèmes Micro-Manager, simulation), réglages de chaque pilote générés automatiquement, détection des caméras ToupTek |
+| Rôles | caméra, platine XY, mise au point, revolver, lampe de transmission |
+| Objectifs | grossissement, ON, immersion, contraste, correction, anneau de phase, distance de travail, pixel calibré, parfocalité (+ modèles courants) |
+| Cubes de fluorescence | excitation, dichroïque, émission (+ modèles, dont les blocs Leitz Ploemopak A, I3, N2.1) ; un clic crée la tourelle de cubes, la lampe et un canal par cube |
+| Canaux | type, cube, exposition, gain, couleur, longueurs d'onde, position de chaque tourelle, état de chaque lampe, obturateurs, préréglage Micro-Manager |
+| Fichier YAML | le profil complet, modifiable directement |
+
+« Vérifier » signale les incohérences (rôle mal attribué, position inexistante...),
+« Tester la connexion » connecte le matériel et fait une capture d'essai.
+
+![Éditeur : périphériques](docs/editeur-peripheriques.png)
+
 ## Ce que Fuji sait déjà faire
 
 - **Piloter un microscope manuel** (Leitz Diaplan) comme un microscope motorisé :

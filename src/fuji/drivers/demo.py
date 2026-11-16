@@ -28,7 +28,7 @@ from fuji.core.devices import Camera, FocusDrive, LightSource, Shutter, StateDev
 from fuji.core.profile import DeviceSpec, MicroscopeProfile
 from fuji.core.properties import PropertyInfo, PropertyType
 
-from . import DriverContext, register_driver
+from . import LIGHT_TYPES, DriverContext, OptionSpec, register_driver
 from .manual import default_state_labels
 
 WORLD_RES_UM = 0.5  # résolution de l'échantillon virtuel (µm/pixel)
@@ -499,10 +499,12 @@ class DemoLightSource(LightSource):
         wavelength_nm: float | None = None,
         on: bool = False,
         intensity: float = 100.0,
+        source_type: str = "LED",
         **kw: Any,
     ) -> None:
         super().__init__(name, **kw)
         self.wavelength_nm = wavelength_nm
+        self.source_type = source_type
         self._on = bool(on)
         self._intensity = float(intensity)
 
@@ -532,7 +534,41 @@ class DemoShutter(Shutter):
 
 
 # ------------------------------------------------------------------ fabriques
-@register_driver("demo.camera")
+@register_driver(
+    "demo.camera",
+    title="Caméra simulée",
+    category="Simulation",
+    kind="camera",
+    description="Caméra virtuelle qui simule un microscope complet (échantillon, Köhler, fluorescence).",
+    options=[
+        OptionSpec("color", "bool", "Couleur", True),
+        OptionSpec("width", "int", "Largeur", 1024, min=64, max=8192, unit="px"),
+        OptionSpec("height", "int", "Hauteur", 768, min=48, max=8192, unit="px"),
+        OptionSpec("bit_depth", "int", "Profondeur", 12, min=8, max=16, unit="bits"),
+        OptionSpec("sensor_pixel_size_um", "float", "Taille du photosite", 2.9, min=0.5, max=30, unit="µm"),
+        OptionSpec("specimen", "choice", "Échantillon", "cellules", choices=SPECIMENS),
+        OptionSpec(
+            "xy_stage",
+            "device",
+            "Platine simulée",
+            device_kind="xy_stage",
+            advanced=True,
+            help="Par défaut : le rôle « platine XY » du profil",
+        ),
+        OptionSpec("focus", "device", "Mise au point simulée", device_kind="focus", advanced=True),
+        OptionSpec("objective_changer", "device", "Tourelle simulée", device_kind="state", advanced=True),
+        OptionSpec("transmitted_light", "device", "Lampe simulée", device_kind="light_source", advanced=True),
+        OptionSpec(
+            "fluorescence",
+            "mapping",
+            "Fluorescence simulée",
+            advanced=True,
+            help="source → {structure: noyaux|cytoplasme, emission_rgb: [r, g, b]}",
+        ),
+        OptionSpec("focus_position_um", "float", "Plan net", 0.0, unit="µm", advanced=True),
+        OptionSpec("simulate_timing", "bool", "Simuler le temps d'exposition", True, advanced=True),
+    ],
+)
 def _demo_camera(spec: DeviceSpec, ctx: DriverContext) -> DemoCamera:
     opts = dict(spec.options)
     roles = ctx.profile.roles
@@ -543,28 +579,80 @@ def _demo_camera(spec: DeviceSpec, ctx: DriverContext) -> DemoCamera:
     return DemoCamera(spec.name, label=spec.label, profile=ctx.profile, devices=ctx.devices, **opts)
 
 
-@register_driver("demo.xy_stage")
+@register_driver(
+    "demo.xy_stage",
+    title="Platine XY simulée",
+    category="Simulation",
+    kind="xy_stage",
+    options=[OptionSpec("travel_um", "float", "Course", 50_000.0, min=100, unit="µm")],
+)
 def _demo_xy(spec: DeviceSpec, ctx: DriverContext) -> DemoXYStage:
     return DemoXYStage(spec.name, label=spec.label, **spec.options)
 
 
-@register_driver("demo.focus")
+@register_driver(
+    "demo.focus",
+    title="Mise au point simulée",
+    category="Simulation",
+    kind="focus",
+    options=[OptionSpec("initial_um", "float", "Position initiale", 0.0, unit="µm")],
+)
 def _demo_focus(spec: DeviceSpec, ctx: DriverContext) -> DemoFocus:
     return DemoFocus(spec.name, label=spec.label, **spec.options)
 
 
-@register_driver("demo.state")
+@register_driver(
+    "demo.state",
+    title="Tourelle / roue simulée",
+    category="Simulation",
+    kind="state",
+    options=[
+        OptionSpec(
+            "labels",
+            "list",
+            "Positions",
+            help="Laisser vide pour la tourelle d'objectifs (positions = objectifs)",
+        ),
+        OptionSpec("initial", "int", "Position initiale", 0, min=0),
+    ],
+)
 def _demo_state(spec: DeviceSpec, ctx: DriverContext) -> DemoStateDevice:
     opts = dict(spec.options)
     opts.pop("labels", None)
     return DemoStateDevice(spec.name, default_state_labels(spec, ctx), label=spec.label, **opts)
 
 
-@register_driver("demo.light")
+@register_driver(
+    "demo.light",
+    title="Source de lumière simulée",
+    category="Simulation",
+    kind="light_source",
+    options=[
+        OptionSpec(
+            "source_type",
+            "choice",
+            "Type",
+            "LED",
+            choices=LIGHT_TYPES,
+        ),
+        OptionSpec(
+            "wavelength_nm",
+            "float",
+            "Longueur d'onde",
+            None,
+            min=200,
+            max=1500,
+            unit="nm",
+            help="Pour une source de fluorescence",
+        ),
+        OptionSpec("on", "bool", "Allumée au démarrage", False),
+        OptionSpec("intensity", "float", "Intensité", 100.0, min=0, max=100, unit="%"),
+    ],
+)
 def _demo_light(spec: DeviceSpec, ctx: DriverContext) -> DemoLightSource:
     return DemoLightSource(spec.name, label=spec.label, **spec.options)
 
 
-@register_driver("demo.shutter")
+@register_driver("demo.shutter", title="Obturateur simulé", category="Simulation", kind="shutter")
 def _demo_shutter(spec: DeviceSpec, ctx: DriverContext) -> DemoShutter:
     return DemoShutter(spec.name, label=spec.label, **spec.options)

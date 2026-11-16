@@ -12,25 +12,42 @@ from fuji.core.microscope import Microscope
 
 log = logging.getLogger(__name__)
 
-EXTRA_STYLE = """
-QLabel#hint { color: #9aa4ae; font-size: 11px; }
-QLabel#warning { color: #f2a93b; }
-QLabel#step { font-size: 15px; font-weight: 600; padding-top: 6px; }
-QPushButton#primary { background-color: #2f6fd6; color: white; border-radius: 4px;
-                      padding: 6px 10px; font-weight: 600; }
-QPushButton#primary:disabled { background-color: #555; color: #aaa; }
-QGroupBox { font-weight: 600; margin-top: 10px; }
-QGroupBox::title { subcontrol-origin: margin; left: 6px; padding: 0 3px; }
-"""
-
 
 def _style(app: QApplication) -> None:
-    try:
-        from napari.qt import get_stylesheet
+    from .theme import apply
 
-        app.setStyleSheet(get_stylesheet("dark") + EXTRA_STYLE)
-    except Exception:  # pragma: no cover - thème indisponible
-        app.setStyleSheet(EXTRA_STYLE)
+    apply(app)
+
+
+def install_error_handler() -> None:
+    """Une erreur imprévue dans l'interface est journalisée et affichée, sans fermer Fuji.
+
+    (Par défaut, PyQt arrête le programme sur toute exception non interceptée.)
+    """
+    import traceback
+
+    if getattr(sys.excepthook, "_fuji", False):
+        return
+
+    def hook(exc_type, exc, tb):  # type: ignore[no-untyped-def]
+        text = "".join(traceback.format_exception(exc_type, exc, tb))
+        log.error("Erreur non interceptée :\n%s", text)
+        app = QApplication.instance()
+        if app is None:
+            return
+        try:
+            box = QMessageBox(app.activeWindow())
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("Erreur")
+            box.setText(f"{exc_type.__name__} : {exc}")
+            box.setInformativeText("Fuji continue de fonctionner. Détails ci-dessous.")
+            box.setDetailedText(text)
+            box.show()
+        except Exception:  # pragma: no cover - affichage impossible
+            pass
+
+    hook._fuji = True  # type: ignore[attr-defined]
+    sys.excepthook = hook
 
 
 def _connect(name: str) -> Microscope:
@@ -71,6 +88,7 @@ def create_window(profile: str | None = None):  # type: ignore[no-untyped-def]
 
 
 def run_app(profile: str | None = None) -> int:
+    install_error_handler()
     app, window = create_window(profile)
     window.show()
     return app.exec()

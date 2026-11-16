@@ -16,6 +16,15 @@
 - [x] Pont Fiji : macros, commandes, ouverture dans Fiji
 - [x] Interface napari : panneaux adaptés au matériel, mode simple / expert
 
+## Version 0.2 (fait)
+
+- [x] Interface sur mesure : thèmes sombre / clair, couleurs d'accent, icônes Fuji,
+      navigation latérale, barre rapide, histogramme en direct avec saturation
+- [x] Éditeur complet de microscope : statif, périphériques et options de chaque pilote,
+      rôles, objectifs, cubes de fluorescence, canaux, YAML ; vérification et test de connexion
+- [x] Assistant « Nouveau microscope » (modèles) et changement de microscope à chaud
+- [x] Catalogue : objectifs courants, cubes (dont Leitz Ploemopak)
+
 ## Prochaines étapes
 
 ### 1. Valider sur ton matériel (priorité)
@@ -31,8 +40,6 @@
 - [ ] Analyse par lots d'un dossier d'images
 
 ### 3. Confort
-- [ ] Assistant de création de profil (sans éditer le YAML)
-- [ ] Histogramme en direct et indicateur de saturation
 - [ ] Profils d'expérience (« time-lapse cellules vivantes », « lame fixée »...)
 - [ ] Installateur macOS (.app)
 

@@ -33,12 +33,16 @@ def contrast_for(data: np.ndarray, bit_depth: int | None) -> tuple[float, float]
 class LiveController(QObject):
     fps_changed = Signal(float)
     live_changed = Signal(bool)
+    #: Chaque nouvelle image affichée (pour l'histogramme, les assistants...).
+    frame_shown = Signal(object)
 
     def __init__(self, microscope: Microscope, viewer: ViewerModel, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.microscope = microscope
         self.viewer = viewer
-        self.auto_contrast = True
+        from qtpy.QtCore import QSettings
+
+        self.auto_contrast = QSettings("Fuji", "Fuji").value("live/auto_contrast", True, type=bool)
         self._timer = QTimer(self)
         self._timer.setInterval(30)
         self._timer.timeout.connect(self._poll)
@@ -77,6 +81,7 @@ class LiveController(QObject):
             return
         self._last_count = count
         self.show_frame(frame, LIVE_LAYER)
+        self.frame_shown.emit(frame)
         now = time.monotonic()
         self._times.append(now)
         if len(self._times) > 2:

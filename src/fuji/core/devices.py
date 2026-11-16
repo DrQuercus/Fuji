@@ -406,6 +406,8 @@ class LightSource(Device):
     supports_intensity: ClassVar[bool] = True
     #: Longueur d'onde centrale (nm) pour une source de fluorescence, sinon ``None``.
     wavelength_nm: float | None = None
+    #: Type de source (halogène, LED, mercure...), informatif.
+    source_type: str = ""
 
     @abstractmethod
     def is_on(self) -> bool: ...

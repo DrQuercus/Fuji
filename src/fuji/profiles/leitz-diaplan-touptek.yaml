@@ -9,6 +9,15 @@ description: >-
   Caméra couleur ToupTek E3ISPM08300KPD (USB 3, 8,3 MP). Prévu pour accueillir
   plus tard une platine motorisée et la fluorescence (Ploemopak).
 
+instrument:
+  manufacturer: Leitz
+  model: Diaplan
+  stand: droit
+  # Objectifs Leitz gravés « 170/0.17 » : tube mécanique de 170 mm (à vérifier)
+  tube_length: 170 mm
+  eyepiece_magnification: 10
+  condenser: "À ADAPTER (ex. condenseur 600, ON 0.90)"
+
 # À ADAPTER : grossissement de l'adaptateur monture C (gravé dessus : 0.5x, 0.63x, 1x...)
 camera_adapter_magnification: 1.0
 # À ADAPTER : ouverture numérique maximale du condenseur (gravée sur le condenseur)

@@ -60,14 +60,18 @@
 | `assistants/` | Köhler, mise au point, calibration du pixel, champ plat |
 | `analysis/` | Images calibrées, registre d'opérations, mesures ImageJ, pont Fiji |
 | `io/ome_tiff.py` | Écriture OME-TIFF en continu, métadonnées par plan |
-| `ui/` | Interface Qt/napari |
+| `ui/theme.py`, `ui/icons.py` | Thème (palettes, accent, feuille de style générée), icônes SVG de Fuji |
+| `ui/main_window.py`, `ui/chrome.py`, `ui/quickbar.py` | Fenêtre : navigation, barre supérieure, barre rapide, histogramme |
+| `ui/config/` | Éditeur de profil : pages, formulaires générés depuis les options des pilotes, modèles |
+| `ui/panels/` | Panneaux : contrôle, assistants, acquisition, analyse, microscopes, réglages |
+| `core/catalog.py` | Objectifs et cubes courants, modèles de microscopes |
 
 ## Ajouter un pilote
 
 ```python
 # monlabo/platine.py
 from fuji.core.devices import XYStage
-from fuji.drivers import register_driver
+from fuji.drivers import OptionSpec, register_driver
 
 class MaPlatine(XYStage):
     def __init__(self, name, port="/dev/ttyUSB0", **kw):
@@ -80,10 +84,20 @@ class MaPlatine(XYStage):
     def _move_to(self, x, y):
         ...
 
-@register_driver("monlabo.platine")
+@register_driver(
+    "monlabo.platine",
+    title="Platine Mon Labo",
+    category="Platines et mise au point",
+    kind="xy_stage",
+    description="Platine pilotée par Arduino.",
+    options=[OptionSpec("port", "str", "Port série", "/dev/ttyUSB0")],
+)
 def _factory(spec, ctx):
     return MaPlatine(spec.name, label=spec.label, **spec.options)
 ```
+
+Les `OptionSpec` (type, unité, bornes, aide, option avancée...) suffisent à l'éditeur de
+configuration pour générer le formulaire du pilote : rien à écrire côté interface.
 
 Dans le `pyproject.toml` du paquet tiers :
 

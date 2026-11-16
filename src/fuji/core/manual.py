@@ -162,10 +162,12 @@ class ManualLightSource(_ManualMixin, LightSource):
         wavelength_nm: float | None = None,
         initial_on: bool = True,
         initial_intensity: float = 100.0,
+        source_type: str = "halogène",
         **kw: Any,
     ) -> None:
         super().__init__(name, **kw)
         self.wavelength_nm = wavelength_nm
+        self.source_type = source_type
         self._on = initial_on
         self._intensity = float(initial_intensity)
 

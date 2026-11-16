@@ -24,7 +24,7 @@ from fuji.core.devices import Camera, Device, FocusDrive, Shutter, StateDevice, 
 from fuji.core.profile import ChannelPreset, DeviceSpec
 from fuji.core.properties import PropertyInfo, PropertyType
 
-from . import DriverContext, register_driver
+from . import DriverContext, OptionSpec, register_driver
 
 log = logging.getLogger(__name__)
 
@@ -353,7 +353,33 @@ def _guess_channel(name: str) -> tuple[str, str]:
     return kind, color
 
 
-@register_driver("micromanager")
+@register_driver(
+    "micromanager",
+    title="Configuration Micro-Manager",
+    category="Systèmes complets",
+    kind=None,
+    description="Charge un fichier de configuration Micro-Manager (.cfg) : caméras, platines, "
+    "tourelles, obturateurs... (~250 appareils de toutes marques).",
+    options=[
+        OptionSpec(
+            "config_file",
+            "path",
+            "Fichier de configuration",
+            "MMConfig_demo.cfg",
+            file_filter="Configuration Micro-Manager (*.cfg)",
+        ),
+        OptionSpec(
+            "adapter_path",
+            "dir",
+            "Dossier Micro-Manager",
+            None,
+            help="Vide = installation trouvée par « mmcore install »",
+        ),
+        OptionSpec("channel_group", "str", "Groupe des canaux", "Channel"),
+        OptionSpec("import_channels", "bool", "Importer les canaux", True),
+        OptionSpec("prefix", "str", "Préfixe des noms", "", advanced=True),
+    ],
+)
 def _micromanager(spec: DeviceSpec, ctx: DriverContext) -> list[Device]:
     opts = dict(spec.options)
     core = opts.pop("core", None)
