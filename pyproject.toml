@@ -1,0 +1,69 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fuji-microscopy"
+version = "0.1.0.dev0"
+description = "Logiciel de microscopie : acquisition multi-microscopes, assistants d'alignement et analyse d'images (napari + Micro-Manager + Fiji)."
+readme = "README.md"
+requires-python = ">=3.10"
+keywords = ["microscopy", "imagej", "fiji", "napari", "micro-manager", "acquisition"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Intended Audience :: Science/Research",
+]
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "scikit-image>=0.22",
+    "pandas>=2.0",
+    "tifffile>=2024.1",
+    "pydantic>=2.5",
+    "pyyaml>=6.0",
+    "psygnal>=0.11",
+    "useq-schema>=0.5",
+]
+
+[project.optional-dependencies]
+# Interface graphique (napari + Qt)
+gui = ["napari[pyqt6]>=0.5", "magicgui>=0.8", "superqt>=0.6"]
+# Compatibilité avec ~250 microscopes/périphériques via Micro-Manager
+micromanager = ["pymmcore-plus>=0.13"]
+# Pont vers Fiji / ImageJ (macros, plugins, Bio-Formats)
+imagej = ["pyimagej>=1.5"]
+all = ["fuji-microscopy[gui,micromanager,imagej]"]
+dev = ["fuji-microscopy[all]", "pytest>=8", "pytest-qt>=4.4", "ruff>=0.5"]
+
+[project.scripts]
+fuji = "fuji.cli:main"
+
+# Points d'extension : un paquet tiers peut ajouter ses propres pilotes
+# ou opérations d'analyse sans modifier Fuji.
+[project.entry-points."fuji.drivers"]
+
+[project.entry-points."fuji.operations"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fuji"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "gui: tests qui nécessitent un affichage Qt",
+    "imagej: tests qui nécessitent Java + ImageJ (téléchargement Maven)",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = [
+    "RUF001", "RUF002", "RUF003",  # accents et typographie française
+    "SIM105", "SIM108", "SIM102", "SIM401", "RUF005", "RUF046",  # préférences de style
+]

@@ -1,0 +1,27 @@
+# N'importe quel microscope compatible Micro-Manager (~250 périphériques :
+# Nikon, Olympus/Evident, Zeiss, Leica, Prior, ASI, Hamamatsu, Andor, PCO...).
+#
+# Prérequis : pip install "fuji-microscopy[micromanager]" puis « mmcore install »
+# (ou une installation de Micro-Manager existante), et un fichier de configuration
+# créé avec l'assistant de configuration matérielle de Micro-Manager.
+name: Micro-Manager (exemple)
+description: >-
+  Charge une configuration Micro-Manager. Caméra, platines, tourelles et obturateurs
+  sont détectés automatiquement ; les préréglages du groupe « Channel » deviennent
+  des canaux Fuji.
+
+devices:
+  - name: mm
+    driver: micromanager
+    options:
+      # Démo fournie par Micro-Manager ; remplace par ton fichier .cfg
+      config_file: MMConfig_demo.cfg
+      # adapter_path: /Applications/Micro-Manager-2.0.3   # facultatif
+      # channel_group: Channel                             # groupe à importer
+
+# Facultatif : décrire les objectifs pour la calibration et les assistants.
+# Les libellés doivent correspondre (même partiellement) à ceux de Micro-Manager.
+objectives:
+  - {label: "10X", magnification: 10, na: 0.3}
+  - {label: "20X", magnification: 20, na: 0.5}
+  - {label: "40X", magnification: 40, na: 0.75}

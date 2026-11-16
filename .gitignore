@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.DS_Store
+
+# SDK propriétaires (ToupTek, etc.) : ne jamais les committer
+toupcam.py
+libtoupcam.*
+toupcam.dll
+
+# Données d'acquisition locales
+acquisitions/
+*.ome.tif
+*.ome.zarr/

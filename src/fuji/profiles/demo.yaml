@@ -1,0 +1,87 @@
+# Microscope simulé : tout est motorisé, avec fond clair et fluorescence.
+# Idéal pour découvrir Fuji sans matériel et tester les assistants.
+name: Démo (microscope simulé)
+description: >-
+  Microscope droit simulé, motorisé, caméra couleur. Fond clair (halogène) et
+  fluorescence (LED 365 / 470 nm). Les molettes du microscope (diaphragme de champ,
+  condenseur...) se règlent dans les propriétés de la caméra, catégorie « Simulation ».
+camera_adapter_magnification: 1.0
+condenser_na: 0.9
+
+devices:
+  - name: platine
+    label: Platine XY
+    driver: demo.xy_stage
+  - name: focus
+    label: Mise au point
+    driver: demo.focus
+  - name: objectifs
+    label: Tourelle d'objectifs
+    driver: demo.state
+    options: {initial: 1}
+  - name: cubes
+    label: Cubes de fluorescence
+    driver: demo.state
+    options:
+      labels: [Vide, DAPI, GFP]
+  - name: lampe
+    label: Halogène (transmission)
+    driver: demo.light
+    options: {on: true, intensity: 80}
+  - name: led_365
+    label: LED 365 nm
+    driver: demo.light
+    options: {wavelength_nm: 365}
+  - name: led_470
+    label: LED 470 nm
+    driver: demo.light
+    options: {wavelength_nm: 470}
+  - name: camera
+    label: Caméra simulée (couleur)
+    driver: demo.camera
+    options:
+      color: true
+      width: 1024
+      height: 768
+      bit_depth: 12
+      sensor_pixel_size_um: 2.9
+      fluorescence:
+        led_365: {structure: noyaux, emission_rgb: [0.25, 0.45, 1.0]}
+        led_470: {structure: cytoplasme, emission_rgb: [0.15, 1.0, 0.3]}
+
+roles:
+  camera: camera
+  xy_stage: platine
+  focus: focus
+  objective_changer: objectifs
+  transmitted_light: lampe
+
+objectives:
+  - {label: "4x/0.10", magnification: 4, na: 0.10}
+  - {label: "10x/0.25", magnification: 10, na: 0.25}
+  - {label: "40x/0.65", magnification: 40, na: 0.65}
+  - {label: "100x/1.25 huile", magnification: 100, na: 1.25, immersion: huile}
+
+channels:
+  - name: Fond clair
+    kind: transmission
+    exposure_ms: 10
+    states: {cubes: Vide}
+    lights: {lampe: {on: true}}
+  - name: DAPI
+    kind: fluorescence
+    exposure_ms: 80
+    states: {cubes: DAPI}
+    lights: {led_365: {on: true, intensity: 60}}
+    color: blue
+    excitation_nm: 365
+    emission_nm: 460
+  - name: GFP
+    kind: fluorescence
+    exposure_ms: 50
+    states: {cubes: GFP}
+    lights: {led_470: {on: true, intensity: 50}}
+    color: green
+    excitation_nm: 470
+    emission_nm: 525
+default_channel: Fond clair
