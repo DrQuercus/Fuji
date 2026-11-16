@@ -153,4 +153,16 @@ Sous Linux sans écran : `xvfb-run -a pytest`. Comparaison directe avec ImageJ :
 
 ## Licence
 
-À définir.
+Fuji est un logiciel libre sous licence [BSD-3-Clause](LICENSE), comme napari,
+pymmcore-plus et scikit-image sur lesquels il s'appuie.
+
+Les composants externes gardent leur propre licence : Micro-Manager, Fiji/ImageJ
+(installés séparément) et le SDK ToupTek, propriétaire, que Fuji n'inclut pas et
+que chacun télécharge chez le fabricant.
+
+## Contribuer
+
+Les contributions sont bienvenues : nouveaux pilotes de matériel, opérations
+d'analyse, profils de microscopes, traductions. Voir
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) pour ajouter un pilote ou une
+opération, et lancer `pytest` avant de proposer une modification.

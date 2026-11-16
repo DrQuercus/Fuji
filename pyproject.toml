@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
@@ -8,11 +8,14 @@ version = "0.1.0.dev0"
 description = "Logiciel de microscopie : acquisition multi-microscopes, assistants d'alignement et analyse d'images (napari + Micro-Manager + Fiji)."
 readme = "README.md"
 requires-python = ">=3.10"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
 keywords = ["microscopy", "imagej", "fiji", "napari", "micro-manager", "acquisition"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering :: Image Processing",
     "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
 ]
 dependencies = [
     "numpy>=1.26",
