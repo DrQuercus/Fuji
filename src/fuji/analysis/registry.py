@@ -28,7 +28,10 @@ from dataclasses import dataclass, field
 from importlib.metadata import entry_points
 from typing import Annotated, Any, get_args, get_origin, get_type_hints
 
-from .image import Image, Labels, Table
+from .image import Image, Labels, Points, Rois, Table
+
+#: Types d'entrée d'une opération : ce sont des calques (images, masques, ROI, points).
+INPUT_KINDS = (Image, Labels, Rois, Points)
 
 log = logging.getLogger(__name__)
 
@@ -63,7 +66,7 @@ class ParamSpec:
 @dataclass(frozen=True)
 class InputSpec:
     name: str
-    kind: type  # Image ou Labels
+    kind: type  # Image, Labels, Rois ou Points
     optional: bool
 
 
@@ -77,6 +80,9 @@ class Operation:
     imagej: str | None = None
     inputs: list[InputSpec] = field(default_factory=list)
     params: list[ParamSpec] = field(default_factory=list)
+    #: Vrai si l'opération travaille sur la pile entière (projection, montage...). Les
+    #: autres opérations reçoivent un plan 2D ; pour une pile, on les applique plan par plan.
+    stack: bool = False
 
     def __call__(self, *inputs: Any, **params: Any) -> Any:
         return self.func(*inputs, **params)
@@ -107,7 +113,7 @@ def _unwrap(annotation: Any) -> tuple[Any, Param | None, bool]:
 
 
 def operation(
-    name: str, *, category: str, description: str = "", imagej: str | None = None
+    name: str, *, category: str, description: str = "", imagej: str | None = None, stack: bool = False
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     def deco(func: Callable[..., Any]) -> Callable[..., Any]:
         hints = get_type_hints(func, include_extras=True)
@@ -116,14 +122,14 @@ def operation(
         params: list[ParamSpec] = []
         for pname, p in sig.parameters.items():
             base, meta, optional = _unwrap(hints.get(pname, Any))
-            if base in (Image, Labels):
+            if base in INPUT_KINDS:
                 inputs.append(InputSpec(pname, base, optional or p.default is None))
             else:
                 if p.default is inspect.Parameter.empty:
                     raise TypeError(f"{name} : le réglage {pname!r} doit avoir une valeur par défaut")
                 params.append(ParamSpec(pname, base, p.default, meta or Param()))
         doc = description or inspect.getdoc(func) or ""
-        _REGISTRY[name] = Operation(name, func, category, doc, imagej, inputs, params)
+        _REGISTRY[name] = Operation(name, func, category, doc, imagej, inputs, params, stack)
         return func
 
     return deco
@@ -165,6 +171,52 @@ def get_operation(name: str) -> Operation:
         return _REGISTRY[name]
     except KeyError:
         raise KeyError(f"Opération inconnue {name!r}. Disponibles : {sorted(_REGISTRY)}") from None
+
+
+def combine_planes(results: list[Any], indices: list[tuple[int, ...]], lead_shape: tuple[int, ...]) -> Any:
+    """Rassemble les résultats d'une opération appliquée plan par plan à une pile.
+
+    Images et masques sont réempilés, les tableaux mis bout à bout avec une colonne
+    « Plan », les points regroupés avec leurs coordonnées dans la pile.
+    """
+    import numpy as np
+    import pandas as pd
+
+    if not results:
+        raise ValueError("Pile vide")
+    first = results[0]
+    if isinstance(first, tuple):
+        return tuple(combine_planes([r[i] for r in results], indices, lead_shape) for i in range(len(first)))
+    if first is None:
+        return None
+
+    def label(index: tuple[int, ...]) -> str:
+        return ", ".join(str(i + 1) for i in index)
+
+    if isinstance(first, (Image, Labels)):
+        shapes = {r.data.shape for r in results}
+        if len(shapes) != 1:
+            raise ValueError("Les plans n'ont pas tous la même taille après l'opération")
+        data = np.stack([r.data for r in results]).reshape(*lead_shape, *first.data.shape)
+        return type(first)(data, first.pixel_size_um, first.name, dict(first.metadata))
+    if isinstance(first, Table):
+        frames = []
+        for index, table in zip(indices, results, strict=True):
+            df = table.data.copy()
+            df.insert(0, "Plan", label(index))
+            frames.append(df)
+        data = pd.concat(frames, ignore_index=True)
+        data.index = pd.RangeIndex(1, len(data) + 1)
+        return Table(data, first.name, dict(first.units), {}, first.plot)
+    if isinstance(first, Points):
+        rows = [
+            np.column_stack([np.tile(index, (len(p.data), 1)), p.data])
+            for index, p in zip(indices, results, strict=True)
+            if len(p.data)
+        ]
+        data = np.vstack(rows) if rows else np.zeros((0, len(lead_shape) + 2))
+        return Points(data, first.pixel_size_um, first.name)
+    return first
 
 
 def run(name: str, *inputs: Any, **params: Any) -> Image | Labels | Table | tuple[Any, ...]:

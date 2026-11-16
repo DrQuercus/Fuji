@@ -416,3 +416,171 @@ def test_channel_page_reload_keeps_changes_made_elsewhere(qtbot):
     assert editor.data["channels"][0]["exposure_ms"] == 123.0
     page._commit()
     assert editor.data["channels"][0]["exposure_ms"] == 123.0
+
+
+# ------------------------------------------------------- analyse à la manière d'ImageJ
+def _idle(qtbot, panel):
+    qtbot.wait(120)
+    qtbot.waitUntil(lambda: not panel._busy, timeout=20000)
+    qtbot.wait(120)
+
+
+def _last_table(window):
+    return window.results_tabs.widget(window.results_tabs.count() - 1)
+
+
+def test_roi_tools_and_quick_measurements(window, qtbot):
+    import numpy as np
+
+    window._on_snap(window.m.snap())
+    capture = window.viewer.layers["Capture 1"]
+    px = capture.metadata["pixel_size_um"]
+    panel = window.analysis
+    panel.set_tool("shapes", "add_rectangle")
+    roi = window.viewer.layers["ROI"]
+    assert roi.mode == "add_rectangle" and tuple(roi.scale) == tuple(capture.scale[-2:])
+    roi.add_rectangles(np.array([[100, 150], [100, 400], [300, 400], [300, 150]], float))
+    roi.add_lines(np.array([[50, 50], [50, 600]], float))
+    panel.set_tool("", "pan_zoom")
+    assert roi.mode == "pan_zoom"
+    window.viewer.layers.selection.active = capture
+
+    window.quick_measure()  # Ctrl+M : mesure les ROI dessinées, comme ImageJ
+    _idle(qtbot, panel)
+    table = _last_table(window).table
+    assert table.data["Type"].tolist() == ["rectangle", "line"]
+    assert table.data["Area"].iloc[0] == pytest.approx(200 * 250 * px * px)
+    assert table.data["Length"].iloc[1] == pytest.approx(550 * px)
+
+    window.quick_operation("Profil d'intensité")
+    _idle(qtbot, panel)
+    widget = _last_table(window)
+    assert widget.plot is not None and widget.table.plot.kind == "ligne"
+    widget.plot.grab()  # le graphique se dessine sans erreur
+    widget.plot.mouseDoubleClickEvent(None)
+    widget.plot.grab()
+
+    window.quick_operation("Histogramme")
+    _idle(qtbot, panel)
+    assert _last_table(window).table.plot.kind == "barres"
+
+    panel.clear_rois()
+    assert len(roi.data) == 0
+    window.quick_measure()  # plus de ROI : toute l'image
+    _idle(qtbot, panel)
+    assert _last_table(window).table.name.startswith("Mesure")
+
+
+def test_roi_coordinates_follow_the_image_scale(window):
+    """Un calque de formes n'a pas forcément l'échelle de l'image mesurée."""
+    import numpy as np
+
+    from fuji.ui.panels.analysis_panel import layer_to_points, layer_to_rois
+
+    image = window.viewer.add_image(
+        np.zeros((100, 200), np.uint8), name="img", scale=(0.5, 0.5), translate=(10, 20)
+    )
+    image.metadata["pixel_size_um"] = 0.5
+    shapes = window.viewer.add_shapes(
+        [np.array([[15.0, 30.0], [15.0, 50.0], [25.0, 50.0], [25.0, 30.0]])],
+        shape_type="rectangle",
+        scale=(1, 1),
+    )
+    rois = layer_to_rois(shapes, image, window.viewer)
+    assert rois.vertices(0).tolist() == [[10, 20], [10, 60], [30, 60], [30, 20]] and rois.pixel_size_um == 0.5
+    points = window.viewer.add_points(np.array([[20.0, 40.0]]), scale=(2, 2))
+    assert layer_to_points(points, image, window.viewer).data.tolist() == [[60.0, 120.0]]
+
+
+def test_live_preview_shows_and_removes_its_layer(window, qtbot):
+    window._on_snap(window.m.snap())
+    panel = window.analysis
+    window.sidebar.select("analysis")
+    panel.select_operation("Flou gaussien")
+    panel._inputs["image"].setCurrentText("Capture 1")
+    before = len(window.viewer.layers)
+
+    def previews():
+        return [layer.name for layer in window.viewer.layers if layer.name.startswith("Aperçu")]
+
+    panel.preview.setChecked(True)
+    qtbot.waitUntil(lambda: bool(previews()), timeout=10000)
+    assert previews() == ["Aperçu — Capture 1 (flou σ=2)"]
+    next(w for w in panel._params if w.name == "sigma").value = 5.0
+    qtbot.waitUntil(lambda: previews() == ["Aperçu — Capture 1 (flou σ=5)"], timeout=10000)
+    assert "Aperçu — Capture 1 (flou σ=5)" not in [panel._inputs["image"].itemText(i) for i in range(5)]
+    panel._run()
+    _idle(qtbot, panel)
+    assert previews() == [] and window.viewer.layers[-1].name == "Capture 1 (flou σ=5)"
+    assert len(window.viewer.layers) == before + 1
+    panel.preview.setChecked(False)
+
+
+def test_operations_apply_to_a_plane_or_to_the_whole_stack(window, qtbot):
+    import numpy as np
+
+    panel = window.analysis
+    window.sidebar.select("analysis")
+    stack = np.zeros((4, 30, 40), np.uint8)
+    for k in range(4):
+        stack[k, 5 + k, 10] = 200
+    layer = window.viewer.add_image(stack, name="pile", scale=(1, 0.5, 0.5))
+    layer.metadata["pixel_size_um"] = 0.5
+    window.viewer.dims.set_current_step(0, 2)
+
+    panel.select_operation("Trouver les maxima")
+    panel._inputs["image"].setCurrentText("pile")
+    assert not panel.whole_stack.isHidden()
+    panel._run()  # le plan affiché seulement
+    _idle(qtbot, panel)
+    points = window.viewer.layers[-1]
+    assert points.data.tolist() == [[7.0, 10.0]] and "[3]" in _last_table(window).table.name
+
+    panel.whole_stack.setChecked(True)
+    panel._run()
+    _idle(qtbot, panel)
+    points = window.viewer.layers[-1]
+    assert points.data.tolist() == [[k, 5.0 + k, 10.0] for k in range(4)]
+    assert _last_table(window).table.data["Plan"].tolist() == ["1", "2", "3", "4"]
+
+    panel.select_operation("Flou gaussien")
+    panel._inputs["image"].setCurrentText("pile")
+    panel.whole_stack.setChecked(True)
+    panel._run()
+    _idle(qtbot, panel)
+    assert window.viewer.layers[-1].data.shape == (4, 30, 40)
+
+    panel.select_operation("Projection")  # opération de pile : reçoit toute la pile
+    panel._inputs["image"].setCurrentText("pile")
+    assert panel.whole_stack.isHidden()
+    panel._run()
+    _idle(qtbot, panel)
+    assert window.viewer.layers[-1].data.shape == (30, 40) and int(window.viewer.layers[-1].data.sum()) == 800
+
+
+def test_scale_and_view_export(window, tmp_path, monkeypatch):
+    import numpy as np
+    from qtpy.QtWidgets import QFileDialog
+
+    layer = window.viewer.add_image(np.zeros((50, 80), np.uint8), name="sans échelle")
+    window.set_pixel_size(layer, 0.25)
+    assert layer.metadata["pixel_size_um"] == 0.25 and tuple(layer.scale) == (0.25, 0.25)
+    out = tmp_path / "vue.png"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(out), ""))
+    window.export_view()
+    assert out.exists() and out.stat().st_size > 1000
+
+
+def test_every_operation_builds_its_form(window):
+    """Toutes les opérations du catalogue s'affichent dans le panneau (formulaire généré)."""
+    from fuji.analysis import list_operations
+
+    panel = window.analysis
+    panel.set_expert(True)
+    for op in list_operations():
+        panel.select_operation(op.name)
+        assert panel._op is op and set(panel._inputs) == {spec.name for spec in op.inputs}
+        assert {w.name for w in panel._params} == {p.name for p in op.params}
+    panel.search.setText("threshold")  # recherche par le nom de la commande ImageJ
+    names = [panel.list.item(i).data(256) for i in range(panel.list.count()) if panel.list.item(i).data(256)]
+    assert "Seuillage automatique" in names and "Seuillage local" in names and "Flou gaussien" not in names

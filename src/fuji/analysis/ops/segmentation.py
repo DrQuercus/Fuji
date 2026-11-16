@@ -8,12 +8,38 @@ import numpy as np
 from scipy import ndimage as ndi
 from skimage import morphology, segmentation
 
+from .. import ij
 from ..image import Image, Labels
 from ..registry import Param, operation
-from ..thresholds import METHODS, threshold_value
+from ..thresholds import LOCAL_METHODS, METHODS, local_threshold, threshold_range
 
-_Method = Literal["Default", "Otsu", "Li", "Yen", "IsoData", "Mean", "Minimum", "Triangle"]
-assert set(_Method.__args__) == set(METHODS)  # type: ignore[attr-defined]
+_Method = Literal[
+    "Default",
+    "Huang",
+    "Intermodes",
+    "IsoData",
+    "IJ_IsoData",
+    "Li",
+    "MaxEntropy",
+    "Mean",
+    "MinError",
+    "Minimum",
+    "Moments",
+    "Otsu",
+    "Percentile",
+    "RenyiEntropy",
+    "Shanbhag",
+    "Triangle",
+    "Yen",
+]
+assert _Method.__args__ == METHODS  # type: ignore[attr-defined]
+_LocalMethod = Literal["Bernsen", "Contrast", "Mean", "Median", "MidGrey", "Niblack", "Phansalkar", "Sauvola"]
+assert _LocalMethod.__args__ == LOCAL_METHODS  # type: ignore[attr-defined]
+
+
+def _gray_values(image: Image) -> np.ndarray:
+    """Valeurs seuillées : l'image, ou son gris 8 bits si elle est en couleur (comme ImageJ)."""
+    return ij.intensity_plane(image.data, image.is_rgb)
 
 
 @operation("Seuillage automatique", category="Segmentation", imagej="Image > Adjust > Threshold... (Auto)")
@@ -25,30 +51,57 @@ def auto_threshold(
         Param(label="objets", description="sombres : cellules sur fond clair (fond clair)"),
     ] = "claires",
 ) -> Labels:
-    """Masque binaire des objets (mêmes méthodes et mêmes noms que dans ImageJ)."""
-    values = image.gray()
-    if image.data.dtype == np.uint8:
-        # comme ImageJ : une image 8 bits (ou RGB convertie en 8 bits) garde ses 256 niveaux
-        values = image.data if not image.is_rgb else np.round(values).astype(np.uint8)
-    t = threshold_value(values, method)
-    mask = values >= t if objects == "claires" else values < t
+    """Masque binaire des objets, avec les 17 méthodes d'ImageJ (mêmes noms, mêmes niveaux).
+
+    « claires » correspond à la case « Dark background » d'ImageJ."""
+    values = _gray_values(image)
+    lower, upper = threshold_range(values, method, dark_background=objects == "claires")
+    mask = (values >= lower) & (values <= upper)
     return Labels(
         mask.astype(np.uint8),
         image.pixel_size_um,
         f"{image.name} (masque {method})",
-        {"threshold": float(t), "method": method, "objects": objects},
+        {"lower": float(lower), "upper": float(upper), "method": method, "objects": objects},
     )
 
 
 @operation("Seuil manuel", category="Segmentation", imagej="Image > Adjust > Threshold...")
 def manual_threshold(
     image: Image,
-    lower: Annotated[float, Param(label="minimum")] = 0.0,
-    upper: Annotated[float, Param(label="maximum")] = 255.0,
+    lower: Annotated[float, Param(label="minimum", min=-1e9)] = 0.0,
+    upper: Annotated[float, Param(label="maximum", min=-1e9)] = 255.0,
 ) -> Labels:
-    gray = image.gray()
+    """Garde les pixels dont la valeur est entre le minimum et le maximum (inclus)."""
+    gray = _gray_values(image)
     mask = (gray >= lower) & (gray <= upper)
     return Labels(mask.astype(np.uint8), image.pixel_size_um, f"{image.name} (masque)")
+
+
+@operation("Seuillage local", category="Segmentation", imagej="Image > Adjust > Auto Local Threshold...")
+def local_threshold_op(
+    image: Image,
+    method: Annotated[_LocalMethod, Param(label="méthode")] = "Phansalkar",
+    radius: Annotated[float, Param(label="rayon", min=1, max=200, unit="px")] = 15.0,
+    objects: Annotated[Literal["claires", "sombres"], Param(label="objets")] = "claires",
+    param1: Annotated[
+        float,
+        Param(
+            label="paramètre 1", min=-1e6, description="0 = valeur par défaut de la méthode", advanced=True
+        ),
+    ] = 0.0,
+    param2: Annotated[
+        float,
+        Param(
+            label="paramètre 2", min=-1e6, description="0 = valeur par défaut de la méthode", advanced=True
+        ),
+    ] = 0.0,
+) -> Labels:
+    """Seuil calculé pour chaque pixel d'après son voisinage : utile quand l'éclairage est
+    inégal ou le contraste variable. L'image est d'abord ramenée à 8 bits, comme dans Fiji."""
+    mask = local_threshold(
+        _gray_values(image), method, radius, param1, param2, bright_objects=objects == "claires"
+    )
+    return Labels(mask.astype(np.uint8), image.pixel_size_um, f"{image.name} (masque local {method})")
 
 
 def _as_mask(labels: Labels) -> np.ndarray:
@@ -57,6 +110,8 @@ def _as_mask(labels: Labels) -> np.ndarray:
 
 @operation("Remplir les trous", category="Binaire", imagej="Process > Binary > Fill Holes")
 def fill_holes(mask: Labels) -> Labels:
+    """Remplit les zones de fond entièrement entourées par un objet (comme ImageJ, un
+    trou relié au fond par un coin seulement est rempli)."""
     out = ndi.binary_fill_holes(_as_mask(mask))
     return Labels(out.astype(np.uint8), mask.pixel_size_um, f"{mask.name} (rempli)")
 

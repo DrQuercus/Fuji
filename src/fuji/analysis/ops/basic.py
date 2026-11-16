@@ -7,35 +7,17 @@ from typing import Annotated, Literal
 import numpy as np
 from scipy import ndimage as ndi
 
+from .. import ij
 from ..image import Image
 from ..registry import Param, operation
 
 
-def _per_channel(image: Image, fn) -> np.ndarray:
-    d = image.data
-    if image.is_rgb:
-        return np.stack([fn(d[..., c]) for c in range(d.shape[-1])], axis=-1)
-    return fn(d)
+def _per_channel(image: Image, fn) -> np.ndarray:  # type: ignore[no-untyped-def]
+    return ij.per_channel(image.data, fn, rgb=image.is_rgb)
 
 
-def _restore_dtype(out: np.ndarray, like: np.ndarray) -> np.ndarray:
-    """Revient au type d'origine ; arrondi « au plus proche, moitié vers le haut » comme
-    ImageJ (``(int)(v + 0.5)``), avec saturation."""
-    if np.issubdtype(like.dtype, np.integer):
-        info = np.iinfo(like.dtype)
-        return np.clip(np.floor(out + 0.5), info.min, info.max).astype(like.dtype)
-    return out.astype(like.dtype, copy=False)
-
-
-def imagej_disk(radius: float) -> np.ndarray:
-    """Masque circulaire d'ImageJ (``RankFilters``) : pixels tels que dx² + dy² ≤ r² + 1.
-
-    Rayon 1 → carré 3×3 ; rayon 2 → 21 pixels (et non les 13 d'un disque « strict »).
-    """
-    r2 = int(radius * radius) + 1
-    k = int(np.sqrt(r2 + 1e-10))
-    yy, xx = np.mgrid[-k : k + 1, -k : k + 1]
-    return (xx * xx + yy * yy) <= r2
+_restore_dtype = ij.restore_dtype
+imagej_disk = ij.disk
 
 
 # ----------------------------------------------------------------- conversions
@@ -51,7 +33,7 @@ def to_gray(
     return image.with_data(image.gray(method), name=f"{image.name} (gris)")
 
 
-@operation("Séparer les canaux", category="Conversion", imagej="Image > Color > Split Channels")
+@operation("Séparer les canaux", category="Couleur", imagej="Image > Color > Split Channels")
 def split_channels(image: Image) -> tuple[Image, ...]:
     """Sépare une image RGB en trois images (rouge, vert, bleu)."""
     if not image.is_rgb:
@@ -81,8 +63,8 @@ def gaussian_blur(
     image: Image,
     sigma: Annotated[float, Param(min=0.1, max=200, step=0.5, unit="px")] = 2.0,
 ) -> Image:
-    """Flou gaussien ; hors de l'image, le pixel du bord est répété (comme ImageJ)."""
-    out = _per_channel(image, lambda a: ndi.gaussian_filter(a.astype(np.float32), sigma, mode="nearest"))
+    """Flou gaussien avec le noyau d'ImageJ ; hors de l'image, le pixel du bord est répété."""
+    out = _per_channel(image, lambda a: ij.gaussian_blur(a, sigma))
     return image.with_data(_restore_dtype(out, image.data), name=f"{image.name} (flou σ={sigma:g})")
 
 

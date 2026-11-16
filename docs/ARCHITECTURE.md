@@ -121,6 +121,16 @@ def mon_filtre(image: Image, force: Annotated[float, Param(min=0, max=10)] = 1.0
 
 L'opération apparaît automatiquement dans le panneau « Analyse » avec son formulaire.
 
+Les entrées annotées `Image`, `Labels`, `Rois` ou `Points` sont des calques (image, masque,
+formes, points) ; les autres paramètres deviennent des réglages. Une opération reçoit un
+plan 2D : pour une pile, le panneau l'applique au plan affiché ou à chaque plan (case
+« Toute la pile »). Une opération qui travaille sur la pile entière (projection,
+montage...) le déclare avec `stack=True`.
+
+Pour retrouver les résultats d'ImageJ, utiliser les helpers de `fuji.analysis.ij` : arrondi
+d'ImageJ (`restore_dtype`), voisinage circulaire (`disk`), flou gaussien, conversions de
+type et de couleur. Voir [IMAGEJ.md](IMAGEJ.md).
+
 ## Fluorescence
 
 Ajouter au profil les cubes (périphérique à états), la ou les sources (lampe ou LED),

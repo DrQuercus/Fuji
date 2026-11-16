@@ -530,6 +530,7 @@ class MainWindow(QMainWindow):
         m_file = mb.addMenu("&Fichier")
         m_file.addAction(self._action("Ouvrir une image…", self.open_dialog, "Ctrl+O"))
         m_file.addAction(self._action("Enregistrer le calque…", self.save_layer, "Ctrl+S"))
+        m_file.addAction(self._action("Exporter la vue (PNG)…", self.export_view, "Ctrl+Shift+E"))
         m_file.addSeparator()
         m_file.addAction(self._action("Nouveau microscope…", self.new_profile, "Ctrl+N"))
         m_file.addAction(self._action("Modifier le microscope…", lambda: self.edit_profile(None), "Ctrl+E"))
@@ -557,6 +558,16 @@ class MainWindow(QMainWindow):
         m_view.addAction(self._action("Recentrer l'image", self.viewer.reset_view, "Ctrl+R"))
 
         m_an = mb.addMenu("&Analyse")
+        # mêmes gestes que dans ImageJ : mesurer, histogramme, profil sur l'image active
+        m_an.addAction(self._action("Mesurer", self.quick_measure, "Ctrl+M"))
+        m_an.addAction(self._action("Histogramme", lambda: self.quick_operation("Histogramme"), "Ctrl+H"))
+        m_an.addAction(
+            self._action(
+                "Profil d'intensité", lambda: self.quick_operation("Profil d'intensité"), "Ctrl+Shift+K"
+            )
+        )
+        m_an.addAction(self._action("Définir l'échelle…", self.set_scale_dialog))
+        m_an.addSeparator()
         m_an.addAction(self._action("Démarrer Fiji (pont ImageJ)", self.start_imagej))
         m_an.addAction(self._action("Exécuter une macro ImageJ…", self.macro_dialog))
         m_help = mb.addMenu("&Aide")
@@ -799,6 +810,112 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Enregistrer", f"Enregistrement impossible : {exc}")
             return
         self.notify(f"Enregistré : {path}")
+
+    def export_view(self) -> None:
+        """Image de ce qui est affiché : calques superposés, ROI et barre d'échelle
+        (l'équivalent de « Flatten » dans ImageJ, pour les figures)."""
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Exporter la vue", str(Path.home() / "vue.png"), "PNG (*.png)"
+        )
+        if not path:
+            return
+        try:
+            self.qt_viewer.screenshot(path, flash=False)
+        except Exception as exc:
+            QMessageBox.warning(self, "Exporter la vue", f"Export impossible : {exc}")
+            return
+        self.notify(f"Vue exportée : {path}")
+
+    # ================================================================ analyse rapide
+    def _active_image_layer(self) -> Any | None:
+        from napari.layers import Image as ImageLayer
+
+        from .panels.analysis_panel import PREVIEW_PREFIX
+
+        active = self.viewer.layers.selection.active
+        if isinstance(active, ImageLayer) and not active.name.startswith(PREVIEW_PREFIX):
+            return active
+        images = [ly for ly in reversed(self.viewer.layers) if isinstance(ly, ImageLayer)]
+        return images[0] if images else None
+
+    def quick_operation(self, name: str) -> None:
+        """Lance une opération sur l'image active, avec les ROI dessinées s'il y en a."""
+        from .panels.analysis_panel import ROI_LAYER
+
+        layer = self._active_image_layer()
+        if layer is None:
+            self.notify("Aucune image à analyser")
+            return
+        panel = self.analysis
+        self.sidebar.select("analysis")
+        panel.preview.setChecked(False)
+        panel.select_operation(name)
+        for key, combo in panel._inputs.items():
+            if key in ("image", "image1") and combo.findText(layer.name) >= 0:
+                combo.setCurrentText(layer.name)
+            elif key == "roi" and combo.findText(ROI_LAYER) >= 0:
+                combo.setCurrentText(ROI_LAYER)
+        panel._run()
+
+    def quick_measure(self) -> None:
+        """« Mesurer » d'ImageJ : les ROI dessinées s'il y en a, sinon l'image entière."""
+        from .panels.analysis_panel import ROI_LAYER
+
+        has_rois = ROI_LAYER in self.viewer.layers and len(self.viewer.layers[ROI_LAYER].data) > 0
+        self.quick_operation("Mesurer les ROI" if has_rois else "Mesurer")
+
+    def set_scale_dialog(self) -> None:
+        """« Set Scale » d'ImageJ : taille du pixel de l'image active, saisie directement
+        ou déduite d'une ligne tracée sur une distance connue."""
+        from napari.layers import Shapes as ShapesLayer
+
+        from .panels.analysis_panel import ROI_LAYER, layer_to_rois
+
+        layer = self._active_image_layer()
+        if layer is None:
+            self.notify("Aucune image à calibrer")
+            return
+        current = float(layer.metadata.get("pixel_size_um") or 0.0)
+        length_px = 0.0
+        if ROI_LAYER in self.viewer.layers and isinstance(self.viewer.layers[ROI_LAYER], ShapesLayer):
+            rois = layer_to_rois(self.viewer.layers[ROI_LAYER], layer, self.viewer)
+            lines = [i for i in range(len(rois)) if rois.is_line(i)]
+            if lines:
+                length_px = rois.length(lines[-1])
+        if length_px > 0:
+            known, ok = QInputDialog.getDouble(
+                self,
+                "Définir l'échelle",
+                f"La dernière ligne tracée mesure {length_px:.1f} pixels.\n"
+                "Distance réelle correspondante (µm) — 0 pour saisir la taille du pixel :",
+                0.0,
+                0.0,
+                1e9,
+                3,
+            )
+            if not ok:
+                return
+            if known > 0:
+                self.set_pixel_size(layer, known / length_px)
+                return
+        px, ok = QInputDialog.getDouble(
+            self, "Définir l'échelle", f"Taille du pixel de « {layer.name} » (µm) :", current, 0.0, 1e6, 5
+        )
+        if ok and px > 0:
+            self.set_pixel_size(layer, px)
+
+    def set_pixel_size(self, layer: Any, px: float) -> None:
+        """Applique une taille de pixel à un calque (les mesures suivantes seront en µm)."""
+        scale = list(layer.scale)
+        scale[-2:] = [px, px]
+        layer.scale = scale
+        layer.metadata["pixel_size_um"] = float(px)
+        try:
+            layer.units = ("pixel",) * (len(scale) - 2) + ("µm", "µm")
+        except Exception:  # anciennes versions de napari : pas d'unités par calque
+            pass
+        self.viewer.reset_view()
+        self.notify(f"Échelle de « {layer.name} » : {px:.4f} µm/pixel")
 
     def show_table(self, table: Table) -> None:
         self.results_tabs.addTab(ResultsWidget(table), table.name[:30])

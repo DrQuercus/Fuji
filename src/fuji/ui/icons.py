@@ -92,6 +92,13 @@ _PATHS: dict[str, str] = {
     "refresh": '<path d="M19.5 8.5A8 8 0 0 0 5 9"/><path d="M4.5 15.5A8 8 0 0 0 19 15"/>'
     '<path d="M19.5 4v4.5H15M4.5 20v-4.5H9"/>',
     "export": '<path d="M12 15V4"/><path d="M7.5 8.5L12 4l4.5 4.5"/><path d="M4.5 13.5v6h15v-6"/>',
+    "roi_rect": '<rect x="4.5" y="6.5" width="15" height="11" rx="1"/>',
+    "roi_ellipse": '<ellipse cx="12" cy="12" rx="8" ry="5.5"/>',
+    "roi_polygon": '<path d="M5 9.5l6.5-5.5 7.5 4-2 10.5H7z"/>',
+    "roi_line": '<path d="M5.5 18.5l13-13"/><circle cx="5.5" cy="18.5" r="1.7" fill="{c}"/>'
+    '<circle cx="18.5" cy="5.5" r="1.7" fill="{c}"/>',
+    "roi_point": '<circle cx="12" cy="12" r="2.3" fill="{c}"/><path d="M12 4v4M12 16v4M4 12h4M16 12h4"/>',
+    "pointer": '<path d="M6 4l11.5 7.6-5.2 1.2 3 5.6-2.2 1.2-3-5.6L6 17z"/>',
     "plug": '<path d="M9 3v5M15 3v5"/><path d="M6.5 8h11v3a5.5 5.5 0 0 1-11 0z"/><path d="M12 16.5V21"/>',
 }
 

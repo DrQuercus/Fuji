@@ -61,10 +61,14 @@ simulé, vide, copie de l'actuel). L'éditeur couvre **tout** le profil :
 - **Assistants** : alignement de Köhler guidé, aide à la mise au point, calibration
   automatique de la taille du pixel avec un micromètre objet, uniformité de
   l'éclairage, correction de champ plat.
-- **Analyse calibrée en µm** : filtres, soustraction de fond (rolling ball),
-  seuillages automatiques (mêmes méthodes qu'ImageJ), séparation des objets
-  (watershed), analyse de particules, mesures. Et **Fiji lui-même** à travers
-  PyImageJ : macros, commandes et plugins de ton installation Fiji.
+- **L'essentiel d'ImageJ, intégré** : 76 opérations recodées avec les formules d'ImageJ —
+  types d'image, filtres, soustraction de fond, calculs entre images, les 17 seuillages
+  automatiques et les seuillages locaux, binaire, piles (projection, montage, recalage),
+  ROI (rectangle, ellipse, polygone, ligne), mesures, profils, histogrammes, maxima,
+  analyse de particules, colocalisation, déconvolution des colorants (H&E, DAB...).
+  Aperçu en direct, traitement de toute une pile, résultats en µm. Voir
+  [la correspondance avec ImageJ](docs/IMAGEJ.md).
+- **Fiji lui-même** reste accessible à travers PyImageJ pour le reste (macros, plugins).
 - **Acquisition multidimensionnelle** (temps, Z, canaux, positions) décrite avec
   `useq-schema`, enregistrée en **OME-TIFF** avec toutes les métadonnées (lisible
   directement par Fiji/Bio-Formats).
@@ -179,9 +183,13 @@ profils fournis.
 ## État de validation
 
 Le code a été entièrement relu et chaque défaut corrigé est couvert par un test
-(plus de 140 tests). Tout cela tourne sur du **matériel simulé** : la vraie caméra ToupTek,
+(près de 190 tests). Tout cela tourne sur du **matériel simulé** : la vraie caméra ToupTek,
 macOS et la comparaison directe avec ImageJ restent à valider — voir
 [la feuille de route](docs/FEUILLE_DE_ROUTE.md).
+
+Les fonctions d'ImageJ recodées sont vérifiées contre les formules d'ImageJ, pas encore
+contre ImageJ lui-même : le test `tests/test_imagej_parity.py` fait cette comparaison sur
+ton ordinateur (environ 90 cas).
 
 ## Tests
 

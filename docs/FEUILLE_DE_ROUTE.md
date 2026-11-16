@@ -55,6 +55,21 @@ Relecture de tout le projet, avec un test de non-régression pour chaque défaut
 - [x] Exposition automatique qui converge depuis une image noire ou saturée ; gros
       fichiers TIFF lus à la demande ; fichiers CSV lisibles par Excel (accents)
 
+## Version 0.4 (fait) — l'essentiel d'ImageJ dans Fuji
+
+Objectif : ne plus avoir à basculer sur ImageJ dans la majorité des cas. Détail et
+niveau de fidélité de chaque fonction dans [IMAGEJ.md](IMAGEJ.md).
+
+- [x] 76 opérations (contre 19) : types, couleur, filtres, calculs, binaire, piles, ROI,
+      mesures — avec les arrondis, voisinages et définitions d'ImageJ
+- [x] Les 17 seuillages automatiques d'ImageJ et 8 seuillages locaux
+- [x] ROI dessinées sur l'image (rectangle, ellipse, polygone, ligne, points), mesurées
+      comme dans ImageJ ; profil d'intensité, histogramme, « Mesurer » au clavier
+- [x] Recherche de maxima (règle de proéminence d'ImageJ), colocalisation (Pearson,
+      Manders, seuils de Costes), déconvolution des colorants histologiques
+- [x] Aperçu en direct, traitement du plan affiché ou de toute la pile, graphiques,
+      export de la vue avec barre d'échelle, réglage de l'échelle sur une ligne connue
+
 ## Prochaines étapes
 
 ### 1. Valider sur ton matériel (priorité)
@@ -69,14 +84,16 @@ matériel simulé**. Trois choses n'ont jamais pu être essayées et restent à 
 - [ ] **macOS** : l'interface n'a été lancée que sous Linux
 - [ ] Renseigner les vrais objectifs et l'adaptateur caméra dans le profil Diaplan
 - [ ] Calibrer chaque objectif au micromètre (assistant « Calibration »)
-- [ ] **ImageJ réel** : lancer le test de parité (`FUJI_TEST_IMAGEJ=1`). Les calculs
-      suivent ceux du code source d'ImageJ, mais ils n'ont pas pu être comparés à ImageJ
-      lui-même ici (pas d'accès au téléchargement de Fiji)
+- [ ] **ImageJ réel** : lancer le test de parité (`FUJI_TEST_IMAGEJ=1`, environ 90 cas). Les
+      calculs suivent ceux du code source d'ImageJ, mais ils n'ont pas pu être comparés à
+      ImageJ lui-même ici (pas d'accès au téléchargement de Fiji). Le test indique
+      précisément quelle fonction diffère, s'il y en a
 
-### 2. Protocoles (l'équivalent des « journals » de MetaMorph)
+### 2. Protocoles (l'équivalent des « journals » de MetaMorph et des macros d'ImageJ)
 - [ ] Enregistrer une suite d'étapes (réglages, acquisition, analyse) dans un fichier
 - [ ] Les rejouer, y compris les étapes manuelles
 - [ ] Analyse par lots d'un dossier d'images
+- [ ] Enregistrer et relire les ROI au format d'ImageJ (.roi, .zip)
 
 ### 3. Confort
 - [ ] Profils d'expérience (« time-lapse cellules vivantes », « lame fixée »...)

@@ -4,7 +4,8 @@ Colonnes (mêmes noms que la fenêtre « Results » d'ImageJ) :
 
 ========== ==================================================================
 Area       surface (µm² si calibré), en pixels de l'objet (trous exclus)
-Mean...    intensités : Mean, StdDev (n−1), Min, Max, Median
+Mean...    intensités : Mean, StdDev (n−1), Min, Max, Median, Mode
+Skew, Kurt asymétrie et aplatissement de la distribution des intensités
 IntDen     Area × Mean ; RawIntDen = somme des valeurs
 X, Y       centroïde ; XM, YM : centre de masse (pondéré par l'intensité)
 BX, BY     coin du rectangle englobant ; Width, Height
@@ -25,6 +26,7 @@ import numpy as np
 import pandas as pd
 from scipy import ndimage as ndi
 
+from .. import ij
 from ..image import Image, Labels, Table
 from ..registry import Param, operation
 from ..shape import feret, fit_ellipse, polygon_area, trace_outline, traced_perimeter
@@ -47,21 +49,63 @@ _UNITS_LEN = (
 
 
 def _intensity_plane(intensity: Image | None) -> np.ndarray | None:
+    """Valeurs mesurées : l'image, ou son gris 8 bits ``(R+V+B)/3`` si elle est en couleur."""
     if intensity is None:
         return None
-    return intensity.gray() if intensity.is_rgb else intensity.data.astype(np.float64)
+    return ij.intensity_plane(intensity.data, intensity.is_rgb)
 
 
-def _intensity_stats(values: np.ndarray) -> dict[str, float]:
+def intensity_stats(values: np.ndarray) -> dict[str, float]:
+    """Statistiques d'intensité d'ImageJ (``ImageStatistics``) sur un ensemble de pixels.
+
+    Particularités reprises d'ImageJ : écart-type sur n − 1 ; pour une image entière, la
+    médiane est la valeur du milieu « haute » (pas la moyenne des deux valeurs centrales)
+    et le mode la valeur la plus fréquente ; pour une image 32 bits, le mode est le centre
+    de la classe la plus peuplée d'un histogramme à 256 classes ; asymétrie et
+    aplatissement calculés avec les moments de la population.
+    """
     n = values.size
+    v = values.astype(np.float64)
+    mean = float(v.mean())
+    integer = values.dtype.kind in "ui"
+    if integer:
+        median = float(np.partition(values, n // 2)[n // 2])
+        lo = int(values.min())
+        mode = float(lo + int(np.argmax(np.bincount((values - lo).astype(np.int64)))))
+    else:
+        median = float(np.median(v))
+        lo_f, hi_f = float(v.min()), float(v.max())
+        if hi_f > lo_f:
+            hist, _ = np.histogram(v, bins=256, range=(lo_f, hi_f))
+            width = (hi_f - lo_f) / 256.0
+            mode = lo_f + int(np.argmax(hist)) * width + width / 2.0
+        else:
+            mode = lo_f
+    variance = float((v * v).mean() - mean * mean)
+    if variance > 0:
+        sd = np.sqrt(variance)
+        skew = float((((v**3).mean() - 3.0 * mean * (v * v).mean()) + 2.0 * mean**3) / (variance * sd))
+        kurt = float(
+            ((v**4).mean() - 4.0 * mean * (v**3).mean() + 6.0 * mean * mean * (v * v).mean() - 3.0 * mean**4)
+            / (variance * variance)
+            - 3.0
+        )
+    else:
+        skew = kurt = float("nan")
     return {
-        "Mean": float(values.mean()),
-        "StdDev": float(values.std(ddof=1)) if n > 1 else 0.0,
-        "Min": float(values.min()),
-        "Max": float(values.max()),
-        "Median": float(np.median(values)),
-        "RawIntDen": float(values.sum()),
+        "Mean": mean,
+        "StdDev": float(v.std(ddof=1)) if n > 1 else 0.0,
+        "Mode": mode,
+        "Min": float(v.min()),
+        "Max": float(v.max()),
+        "Median": median,
+        "Skew": skew,
+        "Kurt": kurt,
+        "RawIntDen": float(v.sum()),
     }
+
+
+_intensity_stats = intensity_stats
 
 
 def measure_objects(
@@ -201,9 +245,12 @@ def analyze_particles(
 
 @operation("Mesurer", category="Mesures", imagej="Analyze > Measure")
 def measure(image: Image, mask: Labels | None = None) -> Table:
-    """Statistiques d'intensité de l'image entière, ou dans un masque."""
+    """Statistiques d'intensité de l'image entière, ou seulement dans un masque
+    (« Limit to threshold »). Pour mesurer des régions dessinées : « Mesurer les ROI »."""
     plane = _intensity_plane(image)
     assert plane is not None
+    if mask is not None and mask.data.shape != plane.shape:
+        raise ValueError("Le masque n'a pas la taille de l'image")
     sel = mask.data > 0 if mask is not None else np.ones(plane.shape, bool)
     vals = plane[sel]
     px = image.px
@@ -212,7 +259,6 @@ def measure(image: Image, mask: Labels | None = None) -> Table:
     row = {"Area": area, **stats}
     if stats:
         row["IntDen"] = area * stats["Mean"]
-    if mask is not None:
-        row["%Area"] = 100.0 * sel.mean()
+    row["%Area"] = 100.0 * sel.mean() if mask is not None else 100.0 * float(np.mean(plane != 0))
     df = pd.DataFrame([row], index=pd.RangeIndex(1, 2))
     return Table(df, name=f"Mesure — {image.name}", units=_units(image.unit, True))

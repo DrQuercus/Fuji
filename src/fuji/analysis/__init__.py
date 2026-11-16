@@ -10,7 +10,7 @@ Exemple ::
     table.to_csv("resultats.csv")
 """
 
-from .image import Image, Labels, Table
+from .image import Image, Labels, Plot, Points, Rois, Table
 from .registry import Operation, Param, categories, get_operation, list_operations, operation, run
 
 __all__ = [
@@ -18,6 +18,9 @@ __all__ = [
     "Labels",
     "Operation",
     "Param",
+    "Plot",
+    "Points",
+    "Rois",
     "Table",
     "categories",
     "get_operation",
