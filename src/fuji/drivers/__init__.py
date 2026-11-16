@@ -11,6 +11,7 @@ Pilotes fournis :
 ``manual.*``           éléments non motorisés (tourelle, mise au point, lampe)
 ``touptek.camera``     caméras ToupTek via le SDK officiel (toupcam)
 ``micromanager``       toute configuration Micro-Manager (~250 périphériques)
+``gcode``              motorisation maison : GRBL, FluidNC, Marlin (port série)
 =====================  ======================================================
 
 Un paquet tiers peut ajouter ses pilotes via le point d'entrée ``fuji.drivers``
@@ -91,6 +92,13 @@ class DriverInfo:
     kind: str | None = None
     description: str = ""
     options: tuple[OptionSpec, ...] = ()
+    #: Pour un pilote qui crée plusieurs périphériques à partir d'une seule entrée de profil :
+    #: fonction (nom de l'entrée, options) → [(nom du périphérique créé, genre), ...]. Permet à
+    #: l'éditeur et aux vérifications de connaître ces périphériques sans se connecter.
+    provides: Callable[[str, dict[str, Any]], list[tuple[str, str]]] | None = None
+
+    def provided(self, name: str, options: dict[str, Any]) -> list[tuple[str, str]]:
+        return list(self.provides(name, options)) if self.provides is not None else []
 
     def option(self, name: str) -> OptionSpec | None:
         return next((o for o in self.options if o.name == name), None)
@@ -120,6 +128,7 @@ _BUILTIN_MODULES = (
     "fuji.drivers.manual",
     "fuji.drivers.touptek",
     "fuji.drivers.micromanager",
+    "fuji.drivers.gcode",
 )
 _loaded = False
 
@@ -132,6 +141,7 @@ def register_driver(
     kind: str | None = None,
     description: str = "",
     options: tuple[OptionSpec, ...] | list[OptionSpec] = (),
+    provides: Callable[[str, dict[str, Any]], list[tuple[str, str]]] | None = None,
 ) -> Callable[[DriverFactory], DriverFactory]:
     """Décorateur : ``@register_driver("monlabo.platine", title=..., options=[...])``."""
 
@@ -144,6 +154,7 @@ def register_driver(
             kind,
             description or (factory.__doc__ or ""),
             tuple(options),
+            provides,
         )
         return factory
 

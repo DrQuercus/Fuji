@@ -53,6 +53,20 @@ class AcquisitionCancelled(Exception):
     pass
 
 
+@dataclass
+class AutofocusPlan:
+    """Mise au point automatique pendant une acquisition (mise au point motorisée).
+
+    ``when`` : ``"position"`` (à chaque nouvelle position XY) ou ``"timepoint"`` (à chaque
+    position de chaque point de temps, pour suivre une dérive lente).
+    """
+
+    when: str = "position"
+    range_um: float = 20.0
+    step_um: float = 2.0
+    method: str = "tenengrad"
+
+
 # ----------------------------------------------------------------- planification
 @dataclass
 class AcquisitionPlan:
@@ -102,6 +116,13 @@ class _Resolver:
         grid = sequence.grid_plan
         self.relative_grid = bool(grid is not None and getattr(grid, "is_relative", False))
         self.z0, self.xy0 = z0, xy0
+        #: correction trouvée par l'autofocus pour la position en cours (ajoutée à tous les Z)
+        self.z_shift = 0.0
+
+    def base_z(self, event: useq.MDAEvent) -> float:
+        """Z de référence de la position de cet événement (centre d'une pile relative)."""
+        pos = self._position(event)
+        return float(pos.z) if pos is not None and pos.z is not None else self.z0
 
     def _position(self, event: useq.MDAEvent) -> Any:
         p = event.index.get("p")
@@ -125,8 +146,8 @@ class _Resolver:
         if self.relative_z:
             pos = self._position(event)
             if pos is None or pos.z is None:
-                return float(event.z_pos) + self.z0
-        return float(event.z_pos)
+                return float(event.z_pos) + self.z0 + self.z_shift
+        return float(event.z_pos) + self.z_shift
 
 
 def _sample_events(sequence: useq.MDASequence) -> tuple[list[useq.MDAEvent], float]:
@@ -342,7 +363,12 @@ class AcquisitionEngine:
 
     # -------------------------------------------------------------- boucle
     def run(
-        self, sequence: useq.MDASequence, *, writer: FrameWriter | None = None, restore: bool = True
+        self,
+        sequence: useq.MDASequence,
+        *,
+        writer: FrameWriter | None = None,
+        restore: bool = True,
+        autofocus: AutofocusPlan | None = None,
     ) -> AcquisitionSummary:
         """Exécute la séquence (bloquant). Ne lève pas : l'issue est dans le résumé renvoyé,
         et ``finished`` est toujours émis, même si la préparation échoue."""
@@ -360,6 +386,7 @@ class AcquisitionEngine:
         z0: float | None = None
         xy0: tuple[float, float] | None = None
         moved_z = moved_xy = False
+        focused: tuple[int, int] | None = None  # (position, point de temps) déjà mis au point
         try:
             cam = scope.require_camera()
             events = list(sequence)
@@ -392,6 +419,31 @@ class AcquisitionEngine:
                 # canal
                 if event.channel is not None and event.channel.config != scope.channel:
                     scope.apply_channel(event.channel.config)
+                # mise au point automatique, une fois par position (ou par point de temps)
+                if autofocus is not None and focus is not None and not focus.manual:
+                    key = (
+                        int(event.index.get("p", 0)),
+                        int(event.index.get("t", 0)) if autofocus.when == "timepoint" else 0,
+                    )
+                    if key != focused:
+                        from fuji.assistants.focus import FocusNotFound
+                        from fuji.assistants.focus import autofocus as find_focus
+
+                        base = resolver.base_z(event)
+                        focus.move_to(base + resolver.z_shift)  # on repart de la dernière mise au point
+                        try:
+                            best = find_focus(
+                                scope,
+                                range_um=autofocus.range_um,
+                                step_um=autofocus.step_um,
+                                method=autofocus.method,
+                            )
+                            resolver.z_shift = best - base
+                        except FocusNotFound:
+                            # champ vide : on garde la mise au point de la position précédente
+                            log.warning("Autofocus sans résultat à la position %s : Z conservé", key[0] + 1)
+                        focused, moved_z = key, True
+                        self._checkpoint()
                 # Z
                 z = resolver.z(event)
                 if z is not None:

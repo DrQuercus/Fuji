@@ -8,6 +8,7 @@ l'objectif en place au lieu de le commander.
 from __future__ import annotations
 
 import math
+import threading
 
 import numpy as np
 from qtpy.QtCore import Qt, QTimer, Signal
@@ -225,6 +226,24 @@ class MicroscopePanel(QWidget):
             dev.set_intensity(intensity)
 
     # ------------------------------------------------------------- platine
+    def run_motion(self, fn, *args) -> None:  # type: ignore[no-untyped-def]
+        """Lance un mouvement dans un thread : l'interface (et le bouton Stop) reste disponible."""
+
+        def work() -> None:
+            try:
+                fn(*args)
+            except Exception as exc:
+                self.message.emit(str(exc))
+
+        threading.Thread(target=work, name="fuji-mouvement", daemon=True).start()
+
+    def _stop_button(self) -> QPushButton:
+        stop = QPushButton("■ Stop")
+        stop.setObjectName("danger")
+        stop.setToolTip("Arrêt d'urgence : interrompt tous les moteurs")
+        stop.clicked.connect(lambda: self.run_motion(self.m.stop_motion))
+        return stop
+
     def _stage_section(self) -> QWidget:
         stage = self.m.xy_stage
         assert stage is not None
@@ -245,14 +264,34 @@ class MicroscopePanel(QWidget):
             b = QPushButton(text)
             b.setFixedWidth(36)
             b.clicked.connect(
-                lambda _=False, dx=dx, dy=dy: stage.move_by(
-                    dx * self.xy_step.value(), dy * self.xy_step.value()
+                lambda _=False, dx=dx, dy=dy: self.run_motion(
+                    stage.move_by, dx * self.xy_step.value(), dy * self.xy_step.value()
                 )
             )
             grid.addWidget(b, r, c)
         grid.addWidget(self.xy_step, 1, 1)
         lay.addLayout(grid)
+        origin = QPushButton("Origine ici")
+        origin.setToolTip("La position actuelle devient X = 0, Y = 0")
+        origin.clicked.connect(lambda: self._set_origin(stage))
+        go_home = QPushButton("Aller à 0")
+        go_home.clicked.connect(lambda: self.run_motion(stage.move_to, 0.0, 0.0))
+        lay.addWidget(row(self._stop_button(), origin, go_home))
+        self.click_to_center = QCheckBox("Double-clic sur l'image : centrer ce point")
+        self.click_to_center.setChecked(True)
+        self.click_to_center.setToolTip("Demande l'orientation de la platine (assistant « Platine »)")
+        lay.addWidget(self.click_to_center)
+        limits = stage.limits()
+        if limits is not None:
+            (xlo, xhi), (ylo, yhi) = limits
+            lay.addWidget(hint_label(f"Course : X {xlo:g} à {xhi:g} µm, Y {ylo:g} à {yhi:g} µm"))
         return box
+
+    def _set_origin(self, device) -> None:  # type: ignore[no-untyped-def]
+        try:
+            device.set_origin()
+        except NotImplementedError as exc:
+            self.message.emit(str(exc))
 
     # ------------------------------------------------------------- focus
     def _focus_section(self) -> QWidget:
@@ -266,9 +305,21 @@ class MicroscopePanel(QWidget):
         self.z_step.setSuffix(" µm")
         up = QPushButton("▲")
         down = QPushButton("▼")
-        up.clicked.connect(lambda: focus.move_by(self.z_step.value()))
-        down.clicked.connect(lambda: focus.move_by(-self.z_step.value()))
+        up.clicked.connect(lambda: self.run_motion(focus.move_by, self.z_step.value()))
+        down.clicked.connect(lambda: self.run_motion(focus.move_by, -self.z_step.value()))
         lay.addWidget(row(self.z_label, down, up, self.z_step))
+        zero = QPushButton("Z = 0 ici")
+        zero.setToolTip("La mise au point actuelle devient Z = 0")
+        zero.clicked.connect(lambda: self._set_origin(focus))
+        buttons = (
+            [zero]
+            if self.m.xy_stage is not None and not self.m.xy_stage.manual
+            else [self._stop_button(), zero]
+        )
+        lay.addWidget(row(*buttons))
+        limits = focus.limits()
+        if limits is not None:
+            lay.addWidget(hint_label(f"Course autorisée : {limits[0]:g} à {limits[1]:g} µm"))
         return box
 
     # ------------------------------------------------------------- rafraîchissement
@@ -304,8 +355,12 @@ class MicroscopePanel(QWidget):
                 slider.blockSignals(True)
                 slider.setValue(int(light.get_intensity()))
                 slider.blockSignals(False)
-        if hasattr(self, "xy_label") and m.xy_stage is not None:
-            x, y = m.xy_stage.get_position()
-            self.xy_label.setText(f"X {x:.1f} µm   Y {y:.1f} µm")
-        if hasattr(self, "z_label") and m.focus is not None:
-            self.z_label.setText(f"Z {m.focus.get_position():.2f} µm")
+        try:  # un contrôleur débranché ne doit pas faire tomber le rafraîchissement
+            if hasattr(self, "xy_label") and m.xy_stage is not None:
+                x, y = m.xy_stage.get_position()
+                self.xy_label.setText(f"X {x:.1f} µm   Y {y:.1f} µm")
+            if hasattr(self, "z_label") and m.focus is not None:
+                self.z_label.setText(f"Z {m.focus.get_position():.2f} µm")
+        except Exception as exc:
+            if hasattr(self, "xy_label"):
+                self.xy_label.setText(f"Position inconnue : {exc}")

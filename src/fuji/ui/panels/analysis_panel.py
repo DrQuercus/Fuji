@@ -530,14 +530,16 @@ class AnalysisPanel(QWidget):
             if self.whole_stack.isChecked() and not op.stack:
                 plane_inputs, indices, lead = self._collect_planes()
                 params = self._param_values()
-                worker = create_worker(run_on_planes, op, plane_inputs, params, _start_thread=False)
+                worker = create_worker(
+                    run_on_planes, op, plane_inputs, params, _start_thread=False, _ignore_errors=True
+                )
                 worker.returned.connect(
                     lambda results: self._show_outputs(op, combine_planes(results, indices, lead))
                 )
                 self.message.emit(f"{op.name} sur {len(indices)} plans…")
             else:
                 inputs, params = self._collect()
-                worker = create_worker(op.func, *inputs, **params, _start_thread=False)
+                worker = create_worker(op.func, *inputs, **params, _start_thread=False, _ignore_errors=True)
                 worker.returned.connect(lambda out: self._show_outputs(op, out))
                 self.message.emit(f"{op.name} en cours…")
         except Exception as exc:
@@ -585,7 +587,7 @@ class AnalysisPanel(QWidget):
             self.message.emit(f"Aperçu : {exc}")
             return
         self._busy = True
-        worker = create_worker(op.func, *inputs, **params, _start_thread=False)
+        worker = create_worker(op.func, *inputs, **params, _start_thread=False, _ignore_errors=True)
         worker.returned.connect(lambda out: self._show_outputs(op, out, preview=True))
         worker.errored.connect(lambda exc: self.message.emit(f"Aperçu : {exc}"))
         worker.finished.connect(self._finished)

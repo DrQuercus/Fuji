@@ -68,8 +68,19 @@ def device_kind(data: dict[str, Any], name: str) -> str | None:
     return info.kind if info else None
 
 
+def provided_devices(d: dict[str, Any]) -> list[tuple[str, str]]:
+    """Périphériques supplémentaires créés par une entrée (ex. « moteurs_xy » pour « moteurs »)."""
+    info = driver_info(d["driver"])
+    return info.provided(d["name"], d.get("options") or {}) if info is not None else []
+
+
 def devices_of_kind(data: dict[str, Any], kind: str) -> list[str]:
-    return [d["name"] for d in devices(data) if (driver_info(d["driver"]) or _NO).kind == kind]
+    names = []
+    for d in devices(data):
+        if (driver_info(d["driver"]) or _NO).kind == kind:
+            names.append(d["name"])
+        names += [name for name, k in provided_devices(d) if k == kind]
+    return names
 
 
 class _NoInfo:
@@ -148,24 +159,27 @@ def rename_device(data: dict[str, Any], old: str, new: str) -> None:
     d = device(data, old)
     if d is None:
         raise KeyError(old)
+    before = [name for name, _ in provided_devices(d)]
     d["name"] = new
+    # les périphériques créés par cette entrée changent de nom avec elle (moteurs_xy → platine_xy)
+    renames = {old: new, **dict(zip(before, [name for name, _ in provided_devices(d)], strict=False))}
     roles = data.setdefault("roles", {})
     for role, value in list(roles.items()):
-        if value == old:
-            roles[role] = new
+        if value in renames:
+            roles[role] = renames[value]
     for ch in data.get("channels", []):
         for key in ("states", "lights"):
             mapping = ch.get(key) or {}
-            if old in mapping:
-                ch[key] = {(new if k == old else k): v for k, v in mapping.items()}
-        ch["shutters"] = [new if s == old else s for s in ch.get("shutters", [])]
+            if any(k in renames for k in mapping):
+                ch[key] = {renames.get(k, k): v for k, v in mapping.items()}
+        ch["shutters"] = [renames.get(s, s) for s in ch.get("shutters", [])]
     for other in devices(data):
         info = driver_info(other["driver"])
         if info is None:
             continue
         for opt in info.options:
-            if opt.type == "device" and other.get("options", {}).get(opt.name) == old:
-                other["options"][opt.name] = new
+            if opt.type == "device" and other.get("options", {}).get(opt.name) in renames:
+                other["options"][opt.name] = renames[other["options"][opt.name]]
         fluo = (other.get("options") or {}).get("fluorescence")
         if isinstance(fluo, dict) and old in fluo:
             other["options"]["fluorescence"] = {(new if k == old else k): v for k, v in fluo.items()}

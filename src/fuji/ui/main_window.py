@@ -118,6 +118,12 @@ class MainWindow(QMainWindow):
     #: objectif, canal ou calibration modifiés. Les signaux du microscope peuvent venir du
     #: thread d'acquisition : ce signal Qt ramène la mise à jour dans le thread de l'interface.
     _optics_changed = Signal()
+    #: message à afficher, émis depuis un thread de travail (mouvements des moteurs)
+    _message = Signal(str)
+    #: l'IA a produit une image ou un résultat (nom) / a fait une action (texte) — émis par le
+    #: thread du serveur, traités dans celui de l'interface
+    _ai_item = Signal(str)
+    _ai_action = Signal(str)
 
     def __init__(self, microscope: Microscope) -> None:
         super().__init__()
@@ -130,6 +136,11 @@ class MainWindow(QMainWindow):
         self._acquiring = False
         self._live_before_acq = False
         self._optics_changed.connect(self._update_optics)
+        self._message.connect(self.notify)
+        self._ai_server: Any = None
+        self._ai_controller: Any = None
+        self._ai_item.connect(self._show_ai_item)
+        self._ai_action.connect(lambda text: self.notify(f"IA : {text}"))
 
         # visualisation napari ---------------------------------------------------
         self.viewer = ViewerModel(title="Fuji")
@@ -207,6 +218,7 @@ class MainWindow(QMainWindow):
         self.settings_panel.expert_changed.connect(self.set_expert)
         self.settings_panel.auto_contrast_changed.connect(self._set_auto_contrast)
         self.settings_panel.message.connect(self.notify)
+        self.settings_panel.ai_server_requested.connect(self.set_ai_server)
         self._set_page("settings", _scroll(self.settings_panel))
 
         # barre d'état -----------------------------------------------------------
@@ -225,6 +237,10 @@ class MainWindow(QMainWindow):
         self.topbar.profile_selected.connect(self.switch_profile)
         self.topbar.manage_profiles.connect(lambda: self.sidebar.select("config"))
         self.viewer.events.status.connect(self._on_status)
+        # double-clic : centrer le point (platine motorisée) ; sinon le zoom habituel de napari
+        self._default_double_click = list(self.viewer.mouse_double_click_callbacks)
+        self.viewer.mouse_double_click_callbacks.clear()
+        self.viewer.mouse_double_click_callbacks.append(self._on_double_click)
 
         self.set_microscope(microscope)
         self._build_menus()
@@ -263,6 +279,7 @@ class MainWindow(QMainWindow):
         self.acquisition.starting.connect(self._on_acq_starting)
         self.acquisition.frame_ready.connect(self._on_acq_frame)
         self.acquisition.acquisition_done.connect(self._on_acq_done)
+        self.acquisition.mosaic_ready.connect(lambda image, name, px: self.add_frame(image, name, None, px))
         self.acquisition.bridge.progress.connect(lambda d, t: self.topbar.set_acquisition(d, t, True))
         self.acquisition.bridge.finished.connect(lambda *_: self.topbar.set_acquisition(0, 0, False))
         self._set_page("acquisition", _scroll(self.acquisition))
@@ -274,6 +291,8 @@ class MainWindow(QMainWindow):
         for panel in (self.control, self.assistants, self.acquisition):
             panel.message.connect(self.notify)
         self.assistants.calibration.profile_saved.connect(self._on_profile_saved)
+        if self.assistants.stage is not None:
+            self.assistants.stage.profile_saved.connect(self._on_profile_saved)
 
         self.quickbar = QuickBar(scope)
         self.quickbar.message.connect(self.notify)
@@ -604,6 +623,100 @@ class MainWindow(QMainWindow):
             except RuntimeError:  # objet Qt déjà détruit
                 pass
 
+    # ================================================================ assistant IA
+    def set_ai_server(self, on: bool, port: int = 8765, hardware: bool = True) -> None:
+        """Démarre ou arrête le serveur MCP : une IA externe peut alors piloter ce Fuji.
+
+        Le serveur n'écoute que sur cet ordinateur. L'IA partage le microscope de la
+        fenêtre : ses images s'affichent ici, et les manipulations manuelles sont demandées
+        à l'écran comme d'habitude."""
+        if self._ai_server is not None:
+            self._ai_server.stop()
+            self._ai_server = self._ai_controller = None
+        if not on:
+            self.settings_panel.set_ai_state(False, "Arrêté")
+            return
+        try:
+            from fuji.remote import MicroscopeController, SafetyPolicy
+            from fuji.remote.mcp_server import HttpServer
+
+            policy = SafetyPolicy(read_only=not hardware)
+            policy.workspace.mkdir(parents=True, exist_ok=True)
+            controller = MicroscopeController(
+                lambda: self.m,
+                policy,
+                own_manual_handler=False,
+                engine=lambda: self.acquisition.engine if hasattr(self, "acquisition") else None,
+            )
+            controller.item_added.connect(self._ai_item.emit)
+            controller.action.connect(self._ai_action.emit)
+            server = HttpServer(controller, "127.0.0.1", port)
+            server.start()
+        except Exception as exc:
+            self.settings_panel.set_ai_state(False, f"Impossible de démarrer : {exc}")
+            QMessageBox.warning(self, "Assistant IA", f"Le serveur pour IA n'a pas pu démarrer :\n\n{exc}")
+            return
+        self._ai_server, self._ai_controller = server, controller
+        mode = "réglages autorisés" if hardware else "observation et analyse seulement"
+        self.settings_panel.set_ai_state(True, f"Actif — {server.url} ({mode})")
+        self.notify(f"Serveur pour IA actif : {server.url}")
+
+    def _show_ai_item(self, name: str) -> None:
+        """Affiche dans Fuji ce que l'IA vient de produire (image, masque, points, tableau)."""
+        controller = self._ai_controller
+        if controller is None:
+            return
+        try:
+            item = controller.item(name)
+        except Exception:
+            return  # déjà remplacé ou oublié
+        if isinstance(item, Table):
+            self.show_table(item)
+            return
+        layer_name = f"IA — {name}"
+        if layer_name in self.viewer.layers:
+            self.viewer.layers.remove(layer_name)
+        try:
+            self.analysis._add_layer(item, (0.0, 0.0), "IA — ")
+        except Exception as exc:
+            self.notify(f"IA : {name} (affichage impossible : {exc})")
+
+    def _on_double_click(self, viewer: Any, event: Any) -> None:
+        """Double-clic sur l'image du live : la platine motorisée amène ce point au centre."""
+        from .live import LIVE_LAYER
+
+        m = self.m
+        box = getattr(getattr(self, "control", None), "click_to_center", None)
+        motorized = m is not None and m.xy_stage is not None and not m.xy_stage.manual
+        try:
+            wanted = bool(motorized and box is not None and box.isChecked())
+        except RuntimeError:  # panneau détruit
+            wanted = False
+        if not wanted or self._acquiring or LIVE_LAYER not in self.viewer.layers:
+            for callback in self._default_double_click:
+                callback(viewer, event)
+            return
+        layer = self.viewer.layers[LIVE_LAYER]
+        coords = layer.world_to_data(event.position)
+        self.center_on(float(coords[-2]), float(coords[-1]), tuple(layer.data.shape))
+
+    def center_on(self, row: float, col: float, shape: tuple[int, ...]) -> None:
+        """Amène un pixel de l'image au centre du champ (mouvement dans un thread de travail)."""
+        import threading
+
+        from fuji.core.stage import center_on_pixel
+
+        scope = self.m
+
+        def work() -> None:
+            try:
+                x, y = center_on_pixel(scope, row, col, shape)  # type: ignore[arg-type]
+                self._message.emit(f"Platine : X {x:.1f} µm, Y {y:.1f} µm")
+            except Exception as exc:
+                self._message.emit(f"Centrage impossible : {exc}")
+
+        threading.Thread(target=work, name="fuji-centrage", daemon=True).start()
+
     def _update_optics(self) -> None:
         if self.m is None:
             return
@@ -647,7 +760,7 @@ class MainWindow(QMainWindow):
             self.notify("Acquisition en cours : capture indisponible")
             return
         self.topbar.capture.setEnabled(False)
-        worker = create_worker(self.m.snap, _start_thread=False)
+        worker = create_worker(self.m.snap, _start_thread=False, _ignore_errors=True)
         worker.returned.connect(self._on_snap)
         worker.errored.connect(lambda e: QMessageBox.warning(self, "Capture", str(e)))
         worker.finished.connect(lambda: self.topbar.capture.setEnabled(not self._acquiring))
@@ -705,12 +818,13 @@ class MainWindow(QMainWindow):
 
     def _on_acq_done(self, summary: Any) -> None:
         self.topbar.set_acquisition(0, 0, False)
+        by_hand = self._acquiring  # sinon l'acquisition a été lancée par l'IA : pas de question
         self._acquiring = False
         self._set_hardware_controls_enabled(True)
         if self._live_before_acq and self.live is not None and self.m is not None and self.m.connected:
             self.live.start()
         self._live_before_acq = False
-        if summary.files and not summary.error:
+        if by_hand and summary.files and not summary.error:
             answer = QMessageBox.question(
                 self, "Acquisition terminée", f"{summary.acquired} images enregistrées.\nOuvrir le résultat ?"
             )
@@ -935,7 +1049,7 @@ class MainWindow(QMainWindow):
 
     def start_imagej(self) -> None:
         self.notify("Démarrage de Fiji (Java)… quelques secondes")
-        worker = create_worker(ImageJBridge.get().version, _start_thread=False)
+        worker = create_worker(ImageJBridge.get().version, _start_thread=False, _ignore_errors=True)
         worker.returned.connect(lambda v: self.notify(f"Fiji prêt : ImageJ {v}"))
         worker.errored.connect(lambda e: QMessageBox.warning(self, "Fiji", str(e)))
         worker.start()
@@ -951,7 +1065,9 @@ class MainWindow(QMainWindow):
             return
         layer = self.viewer.layers.selection.active
         image = layer_to_image(layer) if layer is not None else None
-        worker = create_worker(lambda: ImageJBridge.get().run_macro(text, image), _start_thread=False)
+        worker = create_worker(
+            lambda: ImageJBridge.get().run_macro(text, image), _start_thread=False, _ignore_errors=True
+        )
         worker.returned.connect(self._on_macro)
         worker.errored.connect(lambda e: QMessageBox.warning(self, "Macro ImageJ", str(e)))
         worker.start()
@@ -974,6 +1090,9 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event: Any) -> None:
+        if self._ai_server is not None and not self._acquiring:
+            self._ai_server.stop()
+            self._ai_server = None
         if self._acquiring and not getattr(self, "_closed", False):
             answer = QMessageBox.question(
                 self, "Acquisition en cours", "Une acquisition est en cours. L'arrêter et quitter ?"

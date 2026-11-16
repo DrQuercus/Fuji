@@ -29,7 +29,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from fuji.core.acquisition import AcquisitionEngine, AcquisitionSummary, plan_acquisition
+from fuji.core.acquisition import AcquisitionEngine, AcquisitionSummary, AutofocusPlan, plan_acquisition
 from fuji.core.microscope import Microscope
 from fuji.io import OMETiffWriter
 
@@ -52,6 +52,8 @@ class AcquisitionPanel(QWidget):
     acquisition_done = Signal(object)  # AcquisitionSummary
     #: émis juste avant le lancement (la fenêtre arrête le live et verrouille les réglages)
     starting = Signal()
+    #: mosaïque assemblée : (image, nom, taille du pixel)
+    mosaic_ready = Signal(object, str, object)
     message = Signal(str)
 
     def __init__(self, microscope: Microscope, parent: QWidget | None = None) -> None:
@@ -62,8 +64,11 @@ class AcquisitionPanel(QWidget):
         self.bridge.connect_engine(self.engine)
         self.bridge.progress.connect(self._on_progress)
         self.bridge.frame.connect(self.frame_ready.emit)
+        self.bridge.frame.connect(self._collect_tile)
         self.bridge.finished.connect(self._on_finished)
         self._positions: list[tuple[float, float]] = []
+        self._mosaic = None  # plan de la mosaïque en cours d'acquisition
+        self._tiles: dict[int, dict[int, object]] = {}
         caps = microscope.capabilities()
         settings = QSettings("Fuji", "Fuji")
 
@@ -157,6 +162,54 @@ class AcquisitionPanel(QWidget):
             blay.addWidget(row(add, clear))
             lay.addWidget(box)
 
+            box, blay = section(
+                "Mosaïque",
+                hint="Balaye une zone plus grande que le champ, centrée sur la position actuelle, et "
+                "assemble les images. Mesurez d'abord l'orientation de la platine (assistant « Platine »).",
+            )
+            self.use_mosaic = QCheckBox("Activer")
+            self.mosaic_cols = QSpinBox()
+            self.mosaic_cols.setRange(1, 50)
+            self.mosaic_cols.setValue(3)
+            self.mosaic_rows = QSpinBox()
+            self.mosaic_rows.setRange(1, 50)
+            self.mosaic_rows.setValue(3)
+            self.mosaic_overlap = QSpinBox()
+            self.mosaic_overlap.setRange(0, 60)
+            self.mosaic_overlap.setValue(15)
+            self.mosaic_overlap.setSuffix(" %")
+            form = QFormLayout()
+            form.addRow(self.use_mosaic)
+            form.addRow("Colonnes", self.mosaic_cols)
+            form.addRow("Rangées", self.mosaic_rows)
+            form.addRow("Recouvrement", self.mosaic_overlap)
+            blay.addLayout(form)
+            lay.addWidget(box)
+            self.use_mosaic.toggled.connect(self.update_plan)
+            for w in (self.mosaic_cols, self.mosaic_rows, self.mosaic_overlap):
+                w.valueChanged.connect(self.update_plan)
+
+        # autofocus (mise au point motorisée)
+        if caps["focus_motorized"]:
+            box, blay = section("Autofocus")
+            self.use_autofocus = QCheckBox("Faire la mise au point à chaque position")
+            self.af_each_time = QCheckBox("… et à chaque point de temps")
+            self.af_range = QDoubleSpinBox()
+            self.af_range.setRange(1, 2000)
+            self.af_range.setValue(20)
+            self.af_range.setSuffix(" µm")
+            self.af_step = QDoubleSpinBox()
+            self.af_step.setRange(0.05, 200)
+            self.af_step.setValue(2)
+            self.af_step.setSuffix(" µm")
+            form = QFormLayout()
+            form.addRow(self.use_autofocus)
+            form.addRow(self.af_each_time)
+            form.addRow("Plage balayée", self.af_range)
+            form.addRow("Pas", self.af_step)
+            blay.addLayout(form)
+            lay.addWidget(box)
+
         # plan + commandes
         self.plan_label = QLabel()
         self.plan_label.setWordWrap(True)
@@ -205,13 +258,35 @@ class AcquisitionPanel(QWidget):
             kwargs["time_plan"] = {"interval": self.interval.value(), "loops": self.loops.value()}
         if self.use_z.isChecked() and self.m.focus is not None:
             kwargs["z_plan"] = {"range": self.z_range.value(), "step": self.z_step.value()}
-        if self._positions:
+        mosaic = self._plan_mosaic()
+        if mosaic is not None:
+            kwargs["stage_positions"] = [{"x": x, "y": y} for x, y in mosaic.positions]
+        elif self._positions:
             kwargs["stage_positions"] = [{"x": x, "y": y} for x, y in self._positions]
         if len(kwargs) == 1:
             # rien de coché : une séquence sans axe ne contient aucune image ; on en veut une,
             # avec les réglages actuels
             kwargs["time_plan"] = {"interval": 0, "loops": 1}
         return useq.MDASequence(**kwargs)
+
+    def _plan_mosaic(self):  # type: ignore[no-untyped-def]
+        """Plan de la mosaïque demandée, ou ``None`` si elle n'est pas activée."""
+        if not hasattr(self, "use_mosaic") or not self.use_mosaic.isChecked():
+            return None
+        from fuji.core.stage import plan_mosaic
+
+        return plan_mosaic(
+            self.m, self.mosaic_cols.value(), self.mosaic_rows.value(), self.mosaic_overlap.value() / 100.0
+        )
+
+    def _autofocus_plan(self) -> AutofocusPlan | None:
+        if not hasattr(self, "use_autofocus") or not self.use_autofocus.isChecked():
+            return None
+        return AutofocusPlan(
+            when="timepoint" if self.af_each_time.isChecked() else "position",
+            range_um=self.af_range.value(),
+            step_um=self.af_step.value(),
+        )
 
     def update_plan(self) -> None:
         try:
@@ -276,6 +351,7 @@ class AcquisitionPanel(QWidget):
         except Exception as exc:  # dossier protégé, disque absent, nom invalide...
             QMessageBox.warning(self, "Acquisition", f"Impossible d'enregistrer dans ce dossier :\n\n{exc}")
             return
+        self._mosaic, self._tiles = self._plan_mosaic(), {}
         self.starting.emit()
         self.progress.setRange(0, plan.n_frames)
         self.progress.setValue(0)
@@ -283,7 +359,7 @@ class AcquisitionPanel(QWidget):
         self.start_btn.setEnabled(False)
         self.pause_btn.setEnabled(True)
         self.stop_btn.setEnabled(True)
-        self.engine.start(seq, writer=writer)
+        self.engine.start(seq, writer=writer, autofocus=self._autofocus_plan())
         self.message.emit("Acquisition démarrée")
 
     def _pause(self, paused: bool) -> None:
@@ -298,7 +374,38 @@ class AcquisitionPanel(QWidget):
         self.progress.setValue(done)
         self.progress.setFormat(f"{done} / {total}")
 
+    def _collect_tile(self, event: useq.MDAEvent, frame: object) -> None:
+        """Garde la première image de chaque position (par canal) pour assembler la mosaïque."""
+        if self._mosaic is None:
+            return
+        index = {str(getattr(k, "value", k)): int(v) for k, v in event.index.items()}
+        if index.get("t", 0) != 0 or index.get("z", 0) != 0:
+            return
+        self._tiles.setdefault(index.get("c", 0), {})[index.get("p", 0)] = frame
+
+    def _assemble_mosaic(self) -> None:
+        from fuji.core.stage import refine_offsets, stitch
+
+        plan, self._mosaic = self._mosaic, None
+        if plan is None:
+            return
+        for _channel, tiles in sorted(self._tiles.items()):
+            if len(tiles) != len(plan.positions):
+                continue  # acquisition interrompue : mosaïque incomplète
+            frames = [tiles[i] for i in range(len(plan.positions))]
+            data = [f.data for f in frames]  # type: ignore[attr-defined]
+            try:
+                image = stitch(data, refine_offsets(data, plan.offsets_px))
+            except Exception as exc:
+                self.message.emit(f"Assemblage de la mosaïque impossible : {exc}")
+                return
+            md = frames[0].metadata  # type: ignore[attr-defined]
+            name = f"Mosaïque {plan.columns}×{plan.rows}" + (f" — {md.channel}" if md.channel else "")
+            self.mosaic_ready.emit(image, name, md.pixel_size_um)
+        self._tiles = {}
+
     def _on_finished(self, summary: AcquisitionSummary) -> None:
+        self._assemble_mosaic()
         self.start_btn.setEnabled(True)
         self.pause_btn.setChecked(False)
         self.pause_btn.setEnabled(False)

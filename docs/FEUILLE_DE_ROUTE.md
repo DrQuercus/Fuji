@@ -70,12 +70,33 @@ niveau de fidélité de chaque fonction dans [IMAGEJ.md](IMAGEJ.md).
 - [x] Aperçu en direct, traitement du plan affiché ou de toute la pile, graphiques,
       export de la vue avec barre d'échelle, réglage de l'échelle sur une ligne connue
 
+## Version 0.5 (fait) — motorisation et pilotage par une IA
+
+Détails dans [MOTORISATION.md](MOTORISATION.md) et [IA.md](IA.md).
+
+- [x] **Pilote de moteurs pas à pas** (`gcode`) : cartes GRBL / FluidNC / grblHAL et Marlin ;
+      platine XY, mise au point, roue à filtres, LED ; limites de course, rattrapage du
+      jeu, origine, prise d'origine, arrêt d'urgence
+- [x] Contrôleur simulé et profil `motorise-simulation` pour tout essayer sans matériel
+- [x] **Assistant « Platine »** : orientation de la platine par rapport à la caméra, jeu
+      mécanique — mesures refusées plutôt que fausses sur une image vide ou sombre
+- [x] Centrage par double-clic sur l'image, boutons Stop, déplacements sans figer la fenêtre
+- [x] **Mosaïques** : plan en serpentin, recalage des tuiles sur l'image, assemblage
+- [x] **Autofocus pendant l'acquisition** (à chaque position ou point de temps) ; sur un
+      champ vide la mise au point précédente est conservée
+- [x] **Serveur MCP pour IA** : 37 outils (réglages, images, moteurs, acquisition, analyse),
+      en local, depuis la fenêtre de Fuji ou à distance avec mot de passe
+- [x] **Garde-fous** : lecture seule, moteurs interdits, pas maximal par commande, dossier
+      de travail fermé, consignes manuelles jamais supposées faites, arrêt d'urgence
+      toujours accepté
+- [x] Les erreurs déjà expliquées à l'écran ne déclenchent plus un second message technique
+
 ## Prochaines étapes
 
 ### 1. Valider sur ton matériel (priorité)
 
-Tout ce qui précède est vérifié par plus de 140 tests automatiques, mais **sur du
-matériel simulé**. Trois choses n'ont jamais pu être essayées et restent à valider :
+Tout ce qui précède est vérifié par environ 230 tests automatiques, mais **sur du
+matériel simulé**. Voici ce qui n'a jamais pu être essayé et reste à valider :
 
 - [ ] **La vraie caméra** : `fuji touptek install` puis `fuji touptek info` sur le Mac
       avec la E3ISPM08300KPD
@@ -88,6 +109,10 @@ matériel simulé**. Trois choses n'ont jamais pu être essayées et restent à 
       calculs suivent ceux du code source d'ImageJ, mais ils n'ont pas pu être comparés à
       ImageJ lui-même ici (pas d'accès au téléchargement de Fiji). Le test indique
       précisément quelle fonction diffère, s'il y en a
+- [ ] **De vrais moteurs** : le pilote `gcode` n'a dialogué qu'avec un contrôleur simulé.
+      Premier essai conseillé : une carte GRBL seule, sans mécanique, puis un seul axe
+- [ ] **Une vraie IA** : le serveur MCP a été essayé avec un client de test, pas encore
+      dans une conversation avec Claude Desktop ou Claude Code
 
 ### 2. Protocoles (l'équivalent des « journals » de MetaMorph et des macros d'ImageJ)
 - [ ] Enregistrer une suite d'étapes (réglages, acquisition, analyse) dans un fichier
@@ -105,10 +130,16 @@ matériel simulé**. Trois choses n'ont jamais pu être essayées et restent à 
 - [ ] Gestionnaire de ROI compatible avec le ROI Manager d'ImageJ
 
 ### 5. Motorisation et grandes acquisitions
-- [ ] Pilote pour platine maison (Arduino/ESP32, GRBL ou micrologiciel dédié)
-- [ ] Mosaïques et assemblage, autofocus entre positions
+- [x] Pilote pour platine maison (Arduino/ESP32, GRBL) — version 0.5
+- [x] Mosaïques et assemblage, autofocus entre positions — version 0.5
+- [ ] Liste de positions mémorisées (revenir sur des points repérés à la main)
+- [ ] Carte de mise au point pour les grandes mosaïques (lame inclinée)
+- [ ] Égaliser l'éclairage entre les tuiles d'une mosaïque (raccords encore visibles)
+- [ ] Tourelle d'objectifs et condenseur motorisés
 - [ ] Écriture OME-Zarr pour les très gros volumes
 
 ### 6. Contrôle à distance
+- [x] Moteurs branchés sur un autre ordinateur du réseau (port `socket://…`) — version 0.5
+- [x] Pilotage à distance par une IA (`fuji mcp --http`, avec mot de passe) — version 0.5
 - [ ] Serveur « microscope » sur Raspberry Pi (caméra + moteurs)
 - [ ] Pilote distant côté ordinateur, live compressé

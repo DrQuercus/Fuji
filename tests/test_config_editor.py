@@ -21,8 +21,13 @@ def test_driver_defaults_build_a_device(info):
     opts = info.defaults()
     if info.name.endswith(".state"):
         opts["labels"] = ["A", "B"]
-    devices = create_devices(DeviceSpec(name="x", driver=info.name, options=opts), DriverContext(prof))
-    assert devices and all(d.kind.value == info.kind for d in devices)
+    spec = DeviceSpec(name="x", driver=info.name, options=opts)
+    devices = create_devices(spec, DriverContext(prof))
+    if info.kind is not None:
+        assert devices and all(d.kind.value == info.kind for d in devices)
+    else:  # pilote qui crée plusieurs périphériques : il annonce lesquels
+        announced = info.provided("x", opts)
+        assert announced and {(d.name, d.kind.value) for d in devices[1:]} == set(announced)
 
 
 def test_option_names_match_constructors():

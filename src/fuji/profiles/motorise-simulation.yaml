@@ -1,0 +1,65 @@
+# Microscope motorisé « maison », entièrement simulé.
+#
+# Sert à essayer la motorisation avant d'acheter le moindre moteur : le pilote « gcode »
+# parle à un faux contrôleur GRBL (port : simulation), et la caméra simulée suit la platine
+# et la mise au point. Pour passer au vrai matériel, remplacer « simulation » par le port
+# de la carte (voir docs/MOTORISATION.md) et la caméra simulée par la vraie.
+name: Microscope motorisé (simulation)
+description: Platine XY, mise au point et LED pilotées par un contrôleur GRBL simulé.
+
+instrument:
+  manufacturer: Simulation
+  model: Motorisation maison (GRBL)
+  stand: droit
+
+devices:
+  - name: moteurs
+    driver: gcode
+    label: Contrôleur de moteurs
+    options:
+      port: simulation
+      firmware: grbl
+      um_per_unit_xy: 1000      # le contrôleur compte en millimètres
+      um_per_unit_z: 100        # 1 unité = 100 µm de mise au point (vis micrométrique)
+      feed_xy: 600
+      feed_z: 120
+      z_min_um: -500            # la mise au point ne sortira jamais de cette plage
+      z_max_um: 500
+      x_min_um: -20000
+      x_max_um: 20000
+      y_min_um: -20000
+      y_max_um: 20000
+      light: broche             # LED sur la sortie PWM du contrôleur
+
+  - name: tourelle
+    driver: manual.state
+    label: Tourelle d'objectifs
+    options:
+      labels: ["4x/0.10", "10x/0.25", "40x/0.65"]
+      initial: 1
+
+  - name: camera
+    driver: demo.camera
+    label: Caméra simulée
+    options:
+      width: 1024
+      height: 768
+      color: true
+
+roles:
+  camera: camera
+  objective_changer: tourelle
+
+objectives:
+  - {label: "4x/0.10", magnification: 4, na: 0.10}
+  - {label: "10x/0.25", magnification: 10, na: 0.25}
+  - {label: "40x/0.65", magnification: 40, na: 0.65}
+
+channels:
+  - name: Fond clair
+    kind: transmission
+    exposure_ms: 10
+    lights:
+      moteurs_lampe: {on: true, intensity: 60}
+
+default_channel: Fond clair

@@ -109,14 +109,25 @@ class FocusTracker:
         return FocusState(v, self.best, rel, trend)
 
 
+class FocusNotFound(RuntimeError):
+    """La netteté ne varie pas pendant le balayage : rien de net dans le champ."""
+
+
 def autofocus(
     microscope: Microscope,
     *,
     range_um: float = 20.0,
     step_um: float = 2.0,
     method: str = "tenengrad",
+    min_contrast: float = 1.08,
 ) -> float:
-    """Balayage grossier puis affinage parabolique (mise au point motorisée uniquement)."""
+    """Balayage grossier puis affinage parabolique (mise au point motorisée uniquement).
+
+    Lève :class:`FocusNotFound` (et revient au Z de départ) si la netteté varie de moins de
+    ``min_contrast`` entre le meilleur et le moins bon plan : champ vide, lumière coupée,
+    ou mise au point trop loin de la plage balayée. Mieux vaut ne pas bouger que de
+    s'arrêter sur un plan choisi par le bruit.
+    """
     focus = microscope.focus
     if focus is None or focus.manual:
         raise RuntimeError("L'autofocus nécessite une mise au point motorisée")
@@ -132,6 +143,11 @@ def autofocus(
 
     try:
         zs, vals = scan(z0, range_um / 2, step_um)
+        if float(vals.max()) < min_contrast * float(vals.min()):
+            raise FocusNotFound(
+                "Autofocus : aucun détail net trouvé dans le champ (lame vide, lumière coupée, ou mise "
+                "au point trop éloignée : élargissez la plage)"
+            )
         best = float(zs[int(np.argmax(vals))])
         zs, vals = scan(best, step_um, step_um / 4)
         i = int(np.argmax(vals))

@@ -212,6 +212,10 @@ class MicroscopeProfile(_Model):
     #: Ouverture numérique maximale du condenseur (pour l'assistant Köhler).
     condenser_na: float | None = Field(default=None, gt=0, le=1.4)
     save_directory: str | None = None
+    #: Orientation de la platine motorisée par rapport à l'image : matrice 2×2 telle que
+    #: [dX, dY] platine (µm) = matrice · [dx, dy] image (µm, x vers la droite, y vers le bas).
+    #: Mesurée par l'assistant « Platine » ; ``None`` = axes supposés alignés.
+    stage_orientation: list[list[float]] | None = None
 
     @model_validator(mode="after")
     def _check_names(self) -> MicroscopeProfile:
@@ -246,6 +250,7 @@ class MicroscopeProfile(_Model):
                 issues.append(f"Périphérique « {d.name} » : pilote inconnu « {d.driver} ».")
                 continue
             kinds[d.name] = info.kind
+            kinds.update(dict(info.provided(d.name, d.options)))  # périphériques créés par ce pilote
             known = {o.name for o in info.options}
             extra = set(d.options) - known
             if info.options and extra and d.driver != "micromanager":
@@ -267,7 +272,7 @@ class MicroscopeProfile(_Model):
             name = getattr(self.roles, role)
             if not name:
                 continue
-            if name not in devices:
+            if name not in kinds:
                 if not has_mm:
                     issues.append(f"Rôle « {role} » : périphérique « {name} » inexistant.")
             elif kinds.get(name) not in (kind, None):
@@ -277,7 +282,7 @@ class MicroscopeProfile(_Model):
         sets = {f.name for f in self.filter_sets}
         for ch in self.channels:
             for dev in [*ch.states, *ch.lights, *ch.shutters]:
-                if dev not in devices and not has_mm:
+                if dev not in kinds and not has_mm:
                     issues.append(f"Canal « {ch.name} » : périphérique « {dev} » inexistant.")
             for dev, label in ch.states.items():
                 spec = devices.get(dev)

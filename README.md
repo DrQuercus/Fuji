@@ -72,6 +72,14 @@ simulé, vide, copie de l'actuel). L'éditeur couvre **tout** le profil :
 - **Acquisition multidimensionnelle** (temps, Z, canaux, positions) décrite avec
   `useq-schema`, enregistrée en **OME-TIFF** avec toutes les métadonnées (lisible
   directement par Fiji/Bio-Formats).
+- **Motorisation** : platines du commerce via Micro-Manager, ou motorisation maison avec
+  des moteurs pas à pas et une carte Arduino / ESP32 (GRBL, FluidNC) ou d'imprimante 3D
+  (Marlin). Arrêt d'urgence, limites de course, rattrapage du jeu, centrage par
+  double-clic, **mosaïques assemblées**, autofocus à chaque position. Voir
+  [docs/MOTORISATION.md](docs/MOTORISATION.md).
+- **Pilotage par une IA** : un serveur MCP intégré laisse un assistant (Claude ou autre)
+  voir les images, régler le microscope, lancer acquisitions et analyses, avec des
+  garde-fous. Voir [docs/IA.md](docs/IA.md).
 
 ## Installation (macOS, Linux, Windows)
 
@@ -94,7 +102,8 @@ pip install -e ".[all]"
 ```
 
 Options : `gui` (interface), `micromanager` (compatibilité Micro-Manager), `imagej`
-(pont Fiji), `all` (tout), `dev` (tout + outils de test).
+(pont Fiji), `moteurs` (motorisation maison), `ia` (pilotage par une IA), `all` (tout),
+`dev` (tout + outils de test).
 
 ### Caméra ToupTek
 
@@ -149,6 +158,17 @@ fuji check
 fuji -p demo snap -o capture.ome.tif
 ```
 
+```bash
+fuji moteurs ports
+```
+
+```bash
+fuji -p demo mcp
+```
+
+(`fuji moteurs ports` liste les ports série où chercher une carte de moteurs ; `fuji mcp`
+démarre le serveur pour IA, lancé d'ordinaire par l'assistant lui-même.)
+
 Sans interface (script Python) :
 
 ```python
@@ -174,6 +194,7 @@ ouverture numérique, calibration), canaux (fond clair, DAPI, GFP...). Profils f
 | Profil | Description |
 |---|---|
 | `demo` | Microscope simulé motorisé, fond clair + fluorescence |
+| `motorise-simulation` | Motorisation maison simulée : platine, mise au point et LED sur un faux contrôleur GRBL |
 | `leitz-diaplan-touptek` | Leitz Diaplan manuel + ToupTek E3ISPM08300KPD |
 | `micromanager-exemple` | N'importe quelle configuration Micro-Manager |
 
@@ -183,9 +204,9 @@ profils fournis.
 ## État de validation
 
 Le code a été entièrement relu et chaque défaut corrigé est couvert par un test
-(près de 190 tests). Tout cela tourne sur du **matériel simulé** : la vraie caméra ToupTek,
-macOS et la comparaison directe avec ImageJ restent à valider — voir
-[la feuille de route](docs/FEUILLE_DE_ROUTE.md).
+(environ 230 tests). Tout cela tourne sur du **matériel simulé** : la vraie caméra ToupTek,
+macOS, de vrais moteurs, une vraie conversation avec une IA et la comparaison directe avec
+ImageJ restent à valider — voir [la feuille de route](docs/FEUILLE_DE_ROUTE.md).
 
 Les fonctions d'ImageJ recodées sont vérifiées contre les formules d'ImageJ, pas encore
 contre ImageJ lui-même : le test `tests/test_imagej_parity.py` fait cette comparaison sur

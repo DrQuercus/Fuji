@@ -312,7 +312,7 @@ class FocusWidget(_LiveAssistant):
             self.live.stop()
         self.af_button.setEnabled(False)
         self.message.emit("Autofocus en cours…")
-        worker = create_worker(autofocus, self.m, _start_thread=False)
+        worker = create_worker(autofocus, self.m, _start_thread=False, _ignore_errors=True)
         worker.returned.connect(self._autofocus_done)
         worker.errored.connect(self._autofocus_failed)
         worker.finished.connect(self._autofocus_finished)
@@ -385,7 +385,11 @@ class CalibrationWidget(QWidget):
         self.save.setEnabled(False)
         self.result.setText("Mesure en cours…")
         worker = create_worker(
-            self._grab_and_measure, self.spacing.value(), self.live.running, _start_thread=False
+            self._grab_and_measure,
+            self.spacing.value(),
+            self.live.running,
+            _start_thread=False,
+            _ignore_errors=True,
         )
         worker.returned.connect(self._measured)
         worker.errored.connect(self._measure_failed)
@@ -561,7 +565,7 @@ class IlluminationWidget(QWidget):
         for b in (self.flat_btn, self.dark_btn):
             b.setEnabled(False)
         self.message.emit("Acquisition de la référence (8 images)…")
-        worker = create_worker(average_frames, self.m, 8, _start_thread=False)
+        worker = create_worker(average_frames, self.m, 8, _start_thread=False, _ignore_errors=True)
         worker.returned.connect(self._acquired)
         worker.errored.connect(self._acquire_failed)
         worker.finished.connect(self._acquire_finished)
@@ -617,6 +621,117 @@ class IlluminationWidget(QWidget):
         return (data, False) if out is None else (out, True)
 
 
+# ------------------------------------------------------------- platine motorisée
+class StageWidget(QWidget):
+    """Réglages d'une platine motorisée : orientation par rapport à la caméra, jeu mécanique."""
+
+    message = Signal(str)
+    profile_saved = Signal()
+
+    def __init__(
+        self, microscope: Microscope, viewer: ViewerModel, live: LiveController, parent: QWidget | None = None
+    ) -> None:
+        super().__init__(parent)
+        self.m, self.viewer, self.live = microscope, viewer, live
+        self._calibration = None
+        lay = QVBoxLayout(self)
+        box, blay = section(
+            "Orientation de la platine",
+            hint="Sur une lame avec des détails nets dans tout le champ. La platine fait deux petits pas "
+            "et revient. Nécessaire pour centrer par double-clic et pour assembler les mosaïques.",
+        )
+        self.calibrate = QPushButton("Mesurer l'orientation")
+        self.calibrate.setObjectName("primary")
+        self.calibrate.clicked.connect(self._calibrate)
+        self.orientation_text = QLabel()
+        self.orientation_text.setWordWrap(True)
+        self.save = QPushButton("Enregistrer dans le profil")
+        self.save.setEnabled(False)
+        self.save.clicked.connect(self._save)
+        for w in (self.calibrate, self.orientation_text, self.save):
+            blay.addWidget(w)
+        lay.addWidget(box)
+        box, blay = section(
+            "Jeu mécanique",
+            hint="Écart entre la même position atteinte par la gauche ou par la droite. Reportez la valeur "
+            "dans les options du pilote des moteurs : elle sera rattrapée automatiquement.",
+        )
+        self.backlash_x = QPushButton("Mesurer le jeu en X")
+        self.backlash_y = QPushButton("Mesurer le jeu en Y")
+        self.backlash_x.clicked.connect(lambda: self._backlash("x"))
+        self.backlash_y.clicked.connect(lambda: self._backlash("y"))
+        self.backlash_text = QLabel()
+        self.backlash_text.setWordWrap(True)
+        blay.addWidget(row(self.backlash_x, self.backlash_y))
+        blay.addWidget(self.backlash_text)
+        lay.addWidget(box)
+        lay.addStretch(1)
+        if microscope.profile.stage_orientation:
+            self.orientation_text.setText("Orientation déjà enregistrée dans le profil.")
+
+    def _buttons(self, enabled: bool) -> None:
+        for b in (self.calibrate, self.backlash_x, self.backlash_y):
+            b.setEnabled(enabled)
+
+    def _start(self, fn, on_result) -> None:  # type: ignore[no-untyped-def]
+        self._buttons(False)
+        worker = create_worker(fn, _start_thread=False, _ignore_errors=True)
+        worker.returned.connect(on_result)
+        worker.errored.connect(self._failed)
+        worker.finished.connect(lambda: self._buttons(True))
+        worker.start()
+
+    def _failed(self, exc: Exception) -> None:
+        for text in (self.orientation_text, self.backlash_text):
+            if text.text().startswith("Mesure en cours"):
+                text.setText("Mesure refusée : rien n'a été modifié.")
+        QMessageBox.warning(self, "Platine", str(exc))
+
+    def _calibrate(self) -> None:
+        from fuji.core.stage import calibrate_stage
+
+        self.orientation_text.setText("Mesure en cours…")
+        self._start(lambda: calibrate_stage(self.m), self._calibrated)
+
+    def _calibrated(self, calibration) -> None:  # type: ignore[no-untyped-def]
+        self._calibration = calibration
+        warn = ""
+        if calibration.scale_error is not None and abs(calibration.scale_error) > 0.05:
+            warn = (
+                "<br><b>⚠ Le pixel mesuré par la platine diffère du pixel calibré</b> : vérifiez le nombre "
+                "de µm par unité dans les options des moteurs, ou la calibration de l'objectif."
+            )
+        if calibration.skew > 0.05:
+            warn += (
+                "<br><b>⚠ Les deux axes ne semblent pas perpendiculaires</b> : recommencez sur une zone "
+                "plus nette."
+            )
+        self.orientation_text.setText(calibration.summary[0].upper() + calibration.summary[1:] + "." + warn)
+        self.save.setEnabled(True)
+
+    def _save(self) -> None:
+        from fuji.core.stage import save_stage_calibration
+
+        if self._calibration is None:
+            return
+        save_stage_calibration(self.m, self._calibration)
+        try:
+            path = self.m.save_profile()
+            self.message.emit(f"Orientation de la platine enregistrée dans {path}")
+        except Exception as exc:
+            self.message.emit(f"Orientation appliquée (non enregistrée : {exc})")
+        self.profile_saved.emit()
+
+    def _backlash(self, axis: str) -> None:
+        from fuji.core.stage import measure_backlash
+
+        self.backlash_text.setText("Mesure en cours…")
+        self._start(
+            lambda: measure_backlash(self.m, axis),
+            lambda value: self.backlash_text.setText(f"Jeu en {axis.upper()} : <b>{value:.1f} µm</b>"),
+        )
+
+
 class AssistantsPanel(QTabWidget):
     message = Signal(str)
 
@@ -632,7 +747,13 @@ class AssistantsPanel(QTabWidget):
         self.addTab(self.focus, "Netteté")
         self.addTab(self.calibration, "Calibration")
         self.addTab(self.illumination, "Éclairage")
-        for w in (self.kohler, self.focus, self.calibration, self.illumination):
+        widgets: list[QWidget] = [self.kohler, self.focus, self.calibration, self.illumination]
+        self.stage: StageWidget | None = None
+        if microscope.xy_stage is not None and not microscope.xy_stage.manual:
+            self.stage = StageWidget(microscope, viewer, live)
+            self.addTab(self.stage, "Platine")
+            widgets.append(self.stage)
+        for w in widgets:
             w.message.connect(self.message.emit)
         self.setTabPosition(QTabWidget.TabPosition.North)
         self.setDocumentMode(True)

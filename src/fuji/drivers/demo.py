@@ -297,13 +297,18 @@ class DemoCamera(Camera):
 
     # -- simulation -------------------------------------------------------------
     def _noise(self, shape: tuple[int, ...]) -> np.ndarray:
-        """Bruit gaussien tiré d'une réserve précalculée (bien plus rapide)."""
+        """Bruit gaussien tiré d'une réserve précalculée (bien plus rapide).
+
+        Deux tirages décalés au hasard sont multipliés (valeurs × signes) : sans cela, le
+        bruit de deux images serait le même motif simplement décalé, et un recalage
+        d'images « reconnaîtrait » ce motif là où une vraie caméra ne montre rien."""
         n = int(np.prod(shape))
         pool = getattr(self, "_noise_pool", None)
         if pool is None or pool.size < 2 * n:
             pool = self._noise_pool = self._rng.standard_normal(2 * n + 4099, dtype=np.float32)
-        start = int(self._rng.integers(0, pool.size - n))
-        return pool[start : start + n].reshape(shape)
+            self._sign_pool = self._rng.choice(np.array([-1.0, 1.0], np.float32), pool.size)
+        start, flip = (int(v) for v in self._rng.integers(0, pool.size - n, 2))
+        return (pool[start : start + n] * self._sign_pool[flip : flip + n]).reshape(shape)
 
     def _dev(self, key: str) -> Any:
         name = self._refs.get(key)

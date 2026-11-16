@@ -27,6 +27,8 @@ from ..theme import ACCENTS, FONT_SIZES, ThemeManager
 class SettingsPanel(QWidget):
     expert_changed = Signal(bool)
     auto_contrast_changed = Signal(bool)
+    #: demande de démarrage ou d'arrêt du serveur pour IA : (actif, port, autoriser le matériel)
+    ai_server_requested = Signal(bool, int, bool)
     message = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -83,6 +85,7 @@ class SettingsPanel(QWidget):
         card.add(self.expert)
         card.add(self.auto_contrast)
         lay.addWidget(card)
+        lay.addWidget(self._ai_card(s))
 
         # Fiji
         card = Card(
@@ -142,6 +145,73 @@ class SettingsPanel(QWidget):
         lay.addStretch(1)
         self._refresh_touptek(quiet=True)
 
+    # --------------------------------------------------------------- assistant IA
+    def _ai_card(self, s: QSettings) -> QWidget:
+        from qtpy.QtWidgets import QSpinBox
+
+        card = Card("Assistant IA", icon_name="sparkle")
+        card.add(
+            hint(
+                "Laisse un assistant IA (Claude Desktop, Claude Code ou tout client MCP) voir les images, "
+                "lancer des analyses et, si vous l'autorisez, régler le microscope. Vous voyez dans Fuji "
+                "tout ce qu'il fait, et les manipulations manuelles vous sont demandées à l'écran."
+            )
+        )
+        self.ai_enabled = ToggleSwitch("Serveur pour IA (MCP) actif")
+        self.ai_hardware = ToggleSwitch("L'IA peut régler le matériel")
+        self.ai_hardware.setToolTip("Désactivé : l'IA peut seulement regarder les images et les analyser")
+        self.ai_hardware.setChecked(s.value("ia/hardware", True, type=bool))
+        self.ai_port = QSpinBox()
+        self.ai_port.setRange(1024, 65535)
+        self.ai_port.setValue(int(s.value("ia/port", 8765)))
+        self.ai_status = label("Arrêté", "hint")
+        self.ai_status.setWordWrap(True)  # « Actif — http://… » ne doit pas élargir tout le panneau
+        copy = button(
+            "Copier la configuration", "copy", tooltip="À coller dans la configuration de votre assistant"
+        )
+        copy.clicked.connect(self._copy_ai_config)
+        form = QFormLayout()
+        form.addRow(self.ai_enabled)
+        form.addRow(self.ai_hardware)
+        form.addRow("Port", self.ai_port)
+        form.addRow("État", self.ai_status)
+        card.add(layout=form)
+        card.add(hbox(copy, stretch=True))
+        self.ai_enabled.toggled.connect(self._ai_toggled)
+        self.ai_hardware.toggled.connect(self._ai_hardware_toggled)
+        return card
+
+    def _ai_toggled(self, on: bool) -> None:
+        self.ai_port.setEnabled(not on)
+        QSettings("Fuji", "Fuji").setValue("ia/port", self.ai_port.value())
+        self.ai_server_requested.emit(on, self.ai_port.value(), self.ai_hardware.isChecked())
+
+    def _ai_hardware_toggled(self, on: bool) -> None:
+        QSettings("Fuji", "Fuji").setValue("ia/hardware", on)
+        if self.ai_enabled.isChecked():  # applique tout de suite le nouveau réglage
+            self.ai_server_requested.emit(True, self.ai_port.value(), on)
+
+    def set_ai_state(self, running: bool, text: str) -> None:
+        """Appelé par la fenêtre principale : état réel du serveur."""
+        self.ai_enabled.blockSignals(True)
+        self.ai_enabled.setChecked(running)
+        self.ai_enabled.blockSignals(False)
+        self.ai_port.setEnabled(not running)
+        self.ai_status.setText(text)
+
+    def ai_config(self) -> str:
+        """Configuration à donner au client MCP pour rejoindre ce Fuji."""
+        import json
+
+        url = f"http://127.0.0.1:{self.ai_port.value()}/mcp"
+        return json.dumps({"mcpServers": {"fuji": {"type": "http", "url": url}}}, indent=2)
+
+    def _copy_ai_config(self) -> None:
+        from qtpy.QtGui import QGuiApplication
+
+        QGuiApplication.clipboard().setText(self.ai_config())
+        self.message.emit("Configuration copiée (voir docs/IA.md pour la coller dans votre assistant)")
+
     def _accent(self, name: str) -> None:
         for b in self._accent_buttons:
             b.setChecked(b.toolTip() == name)
@@ -160,7 +230,7 @@ class SettingsPanel(QWidget):
         from fuji.analysis.imagej import ImageJBridge
 
         self.message.emit("Démarrage de Fiji (Java)…")
-        worker = create_worker(ImageJBridge.get().version, _start_thread=False)
+        worker = create_worker(ImageJBridge.get().version, _start_thread=False, _ignore_errors=True)
         worker.returned.connect(lambda v: QMessageBox.information(self, "Fiji", f"ImageJ {v} prêt."))
         worker.errored.connect(lambda e: QMessageBox.warning(self, "Fiji", str(e)))
         worker.start()

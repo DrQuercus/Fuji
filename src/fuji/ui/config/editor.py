@@ -199,7 +199,7 @@ class ConfigEditor(QDialog):
             return lines
 
         self.setCursor(Qt.CursorShape.WaitCursor)
-        worker = create_worker(job, _start_thread=False)
+        worker = create_worker(job, _start_thread=False, _ignore_errors=True)
         worker.returned.connect(
             lambda lines: QMessageBox.information(self, "Connexion réussie", "\n".join(lines))
         )

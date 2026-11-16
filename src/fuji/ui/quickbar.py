@@ -102,6 +102,11 @@ class QuickBar(QWidget):
             cbox.addWidget(self.channels)
             lay.addLayout(cbox, 2)
 
+        if caps["xy_motorized"] or caps["focus_motorized"]:
+            stop = button("Stop", "stop", tooltip="Arrêt d'urgence : interrompt tous les moteurs")
+            stop.setObjectName("danger")
+            stop.clicked.connect(self.stop_motion)
+            lay.addWidget(stop)
         lay.addWidget(separator(vertical=True))
         self.histogram = HistogramWidget()
         self.histogram.setMinimumWidth(220)
@@ -118,6 +123,13 @@ class QuickBar(QWidget):
     def shutdown(self) -> None:
         """Arrête le rafraîchissement avant la déconnexion du microscope."""
         self._timer.stop()
+
+    def stop_motion(self) -> None:
+        """Arrêt d'urgence, hors du thread de l'interface (elle doit rester disponible)."""
+        import threading
+
+        threading.Thread(target=self.m.stop_motion, name="fuji-stop", daemon=True).start()
+        self.message.emit("Arrêt d'urgence envoyé aux moteurs")
 
     # ------------------------------------------------------------- exposition
     def _sync_slider(self, value: float) -> None:

@@ -36,7 +36,11 @@ gui = ["napari[pyqt6]>=0.5", "magicgui>=0.8", "superqt>=0.6"]
 micromanager = ["pymmcore-plus>=0.13"]
 # Pont vers Fiji / ImageJ (macros, plugins, Bio-Formats)
 imagej = ["pyimagej>=1.5"]
-all = ["fuji-microscopy[gui,micromanager,imagej]"]
+# Motorisation maison : contrôleurs G-code (GRBL, FluidNC, Marlin) par le port série
+moteurs = ["pyserial>=3.5"]
+# Pilotage par une IA : serveur MCP (Model Context Protocol)
+ia = ["mcp>=2.0", "uvicorn>=0.30", "pillow>=10"]
+all = ["fuji-microscopy[gui,micromanager,imagej,moteurs,ia]"]
 dev = ["fuji-microscopy[all]", "pytest>=8", "pytest-qt>=4.4", "ruff>=0.5"]
 
 [project.scripts]
@@ -66,6 +70,7 @@ src = ["src", "tests"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/fuji/ui/icons.py" = ["E501"]  # tracés SVG
+"src/fuji/remote/mcp_server.py" = ["E501"]  # descriptions des outils, lues par l'IA
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]

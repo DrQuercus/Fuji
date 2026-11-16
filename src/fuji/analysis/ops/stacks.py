@@ -196,7 +196,7 @@ def register_stack(
 ) -> tuple[Image, Table]:
     """Corrige la dérive d'un time-lapse : chaque plan est décalé (translation seule) pour
     se superposer à la référence. Renvoie la pile recalée et le tableau des décalages."""
-    from skimage.registration import phase_cross_correlation
+    from ..registration import image_shift
 
     if lead_dims(image) != 1:
         raise ValueError("Le recalage demande une pile à un seul curseur (temps ou Z)")
@@ -208,7 +208,8 @@ def register_stack(
     total = np.zeros(2)
     for i in range(1, len(stack)):
         ref = gray[0] if reference == "premier plan" else gray[i - 1]
-        shift, _, _ = phase_cross_correlation(ref, gray[i], upsample_factor=10 if subpixel else 1)
+        dx, dy = image_shift(ref, gray[i], upsample=10 if subpixel else 1)
+        shift = np.array([-dy, -dx])  # correction à appliquer au plan (lignes, colonnes)
         total = np.asarray(shift, float) if reference == "premier plan" else total + shift
         order = 1 if subpixel else 0
         moved = ij.per_channel(

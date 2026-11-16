@@ -116,7 +116,10 @@ class OptionForm(QWidget):
                 w.setDecimals(3 if hi <= 50 else 2)
             if spec.unit:
                 w.setSuffix(f" {spec.unit}")
-            w.setValue(v if t == "float" else int(v))
+            try:  # une valeur inattendue dans le fichier ne doit pas empêcher d'ouvrir l'éditeur
+                w.setValue(float(v) if t == "float" else int(v))
+            except (TypeError, ValueError):
+                w.setValue(spec.default)
             w.valueChanged.connect(self.changed.emit)
             return w
         if t in ("int", "float"):  # facultatif : vide = non défini

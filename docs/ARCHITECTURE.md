@@ -57,6 +57,11 @@
 | `drivers/demo.py` | Microscope simulé (Köhler, défocalisation, fluorescence, micromètre) |
 | `drivers/touptek.py` | Caméras ToupTek (SDK toupcam) |
 | `drivers/micromanager.py` | Toute configuration Micro-Manager via pymmcore-plus |
+| `drivers/gcode.py`, `drivers/gcode_sim.py` | Moteurs pas à pas (GRBL, FluidNC, Marlin) : platine, mise au point, roue, LED ; contrôleur simulé |
+| `core/stage.py` | Platine motorisée : orientation par rapport à la caméra, centrage, jeu, mosaïques (plan, recalage, assemblage) |
+| `analysis/registration.py` | Déplacement entre deux images et confiance dans cette mesure |
+| `remote/controller.py` | Commandes sûres pour un pilotage extérieur (IA, scripts) : garde-fous, mémoire d'images, réponses en texte simple |
+| `remote/mcp_server.py` | Serveur MCP : expose le contrôleur à un assistant IA (stdio ou HTTP avec jeton) |
 | `assistants/` | Köhler, mise au point, calibration du pixel, champ plat |
 | `analysis/` | Images calibrées, registre d'opérations, mesures ImageJ, pont Fiji |
 | `io/ome_tiff.py` | Écriture OME-TIFF en continu, métadonnées par plan |
@@ -152,12 +157,29 @@ channels:
 En passant d'un canal à l'autre, Fuji éteint les sources des autres canaux et règle
 le cube (ou le demande, s'il est manuel).
 
-## Contrôle à distance (prévu)
+## Pilotage extérieur (IA, scripts)
 
-Le cœur ne dépend pas de Qt et toutes les interactions passent par `Microscope`.
-L'étape suivante sera un petit serveur (sur le Raspberry Pi relié au microscope) qui
-expose cette API sur le réseau, et un pilote « distant » côté ordinateur qui
-implémente les mêmes interfaces. Le live sera transmis compressé, les acquisitions
+Le paquet `fuji.remote` contient tout ce qu'il faut pour commander Fuji de l'extérieur :
+
+- `MicroscopeController` regroupe les commandes utiles (réglages, images, moteurs,
+  acquisition, analyse) et applique une `SafetyPolicy` : lecture seule, moteurs interdits,
+  pas maximal par commande, dossier de travail fermé. Il ne dépend ni de Qt ni du
+  protocole utilisé ;
+- `mcp_server.py` l'expose en **MCP** (le standard des assistants IA), par stdio ou par
+  HTTP. Les outils s'exécutent hors de la boucle du serveur, pour qu'un arrêt d'urgence
+  passe pendant un long mouvement.
+
+Dans la fenêtre, le même contrôleur partage le microscope affiché : les images produites
+par l'IA deviennent des calques, les consignes manuelles s'affichent à l'écran.
+
+## Contrôle à distance
+
+Ce qui existe : les moteurs peuvent être branchés sur un autre ordinateur (port
+`socket://…`), et le serveur MCP peut écouter sur le réseau avec un mot de passe.
+
+Ce qui reste prévu : un petit serveur (sur le Raspberry Pi relié au microscope) qui
+expose toute l'API `Microscope` sur le réseau, et un pilote « distant » côté ordinateur
+qui implémente les mêmes interfaces. Le live sera transmis compressé, les acquisitions
 enregistrées sur place puis transférées.
 
 ## Tests

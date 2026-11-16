@@ -192,6 +192,16 @@ class Microscope:
             if dev.manual:
                 dev.action_handler = handler  # type: ignore[attr-defined]
 
+    def stop_motion(self) -> None:
+        """Arrêt d'urgence : interrompt tous les moteurs (platine, mise au point)."""
+        for device in self.devices.values():
+            stop = getattr(device, "stop", None)
+            if callable(stop) and not device.manual:
+                try:
+                    stop()
+                except Exception:  # un moteur injoignable ne doit pas empêcher d'arrêter les autres
+                    log.exception("Arrêt de %s impossible", device.name)
+
     def capabilities(self) -> dict[str, bool]:
         """Ce que ce microscope sait faire : l'interface s'y adapte."""
         cam = self.camera

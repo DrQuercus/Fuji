@@ -333,6 +333,10 @@ class _Positioner(Device):
     def home(self) -> None:
         raise NotImplementedError(f"{self.name} ne sait pas faire de prise d'origine")
 
+    def set_origin(self) -> None:
+        """Déclare la position actuelle comme zéro (si supporté)."""
+        raise NotImplementedError(f"{self.name} ne permet pas de redéfinir son origine")
+
 
 class XYStage(_Positioner):
     """Platine XY motorisée (positions en µm)."""
@@ -380,6 +384,10 @@ class FocusDrive(_Positioner):
 
     def move_by(self, dz: float, *, wait: bool = True) -> None:
         self.move_to(self.get_position() + dz, wait=wait)
+
+    def limits(self) -> tuple[float, float] | None:
+        """Course autorisée (µm), ou ``None`` si elle n'est pas connue."""
+        return None
 
 
 # ----------------------------------------------------------- tourelles, roues, cubes

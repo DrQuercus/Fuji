@@ -2,7 +2,7 @@
 
 from .calibration import MicrometerCalibration, calibrate_micrometer
 from .flatfield import FlatFieldStore, average_frames
-from .focus import FocusTracker, autofocus, focus_peaking, sharpness
+from .focus import FocusNotFound, FocusTracker, autofocus, focus_peaking, sharpness
 from .kohler import (
     KohlerAssistant,
     KohlerGuidance,
@@ -14,6 +14,7 @@ from .kohler import (
 
 __all__ = [
     "FlatFieldStore",
+    "FocusNotFound",
     "FocusTracker",
     "KohlerAssistant",
     "KohlerGuidance",
