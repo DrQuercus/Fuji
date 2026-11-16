@@ -25,7 +25,7 @@ def auto_threshold(
         Param(label="objets", description="sombres : cellules sur fond clair (fond clair)"),
     ] = "claires",
 ) -> Labels:
-    """Masque binaire des objets (même méthodes et noms que dans ImageJ)."""
+    """Masque binaire des objets (mêmes méthodes et mêmes noms que dans ImageJ)."""
     values = image.gray()
     if image.data.dtype == np.uint8:
         # comme ImageJ : une image 8 bits (ou RGB convertie en 8 bits) garde ses 256 niveaux
@@ -61,15 +61,25 @@ def fill_holes(mask: Labels) -> Labels:
     return Labels(out.astype(np.uint8), mask.pixel_size_um, f"{mask.name} (rempli)")
 
 
+_SQUARE = np.ones((3, 3), bool)  # voisinage 3×3 des opérations binaires d'ImageJ
+
+
 @operation("Ouverture", category="Binaire", imagej="Process > Binary > Open")
-def binary_open(mask: Labels, radius: Annotated[int, Param(min=1, max=50, unit="px")] = 1) -> Labels:
-    out = morphology.binary_opening(_as_mask(mask), morphology.disk(radius))
+def binary_open(
+    mask: Labels, iterations: Annotated[int, Param(label="itérations", min=1, max=50)] = 1
+) -> Labels:
+    """Érosion puis dilatation (3×3, répétées) : supprime les petits détails clairs.
+    Comme ImageJ par défaut, le bord de l'image compte comme du fond."""
+    out = ndi.binary_opening(_as_mask(mask), structure=_SQUARE, iterations=iterations)
     return Labels(out.astype(np.uint8), mask.pixel_size_um, f"{mask.name} (ouvert)")
 
 
 @operation("Fermeture", category="Binaire", imagej="Process > Binary > Close-")
-def binary_close(mask: Labels, radius: Annotated[int, Param(min=1, max=50, unit="px")] = 1) -> Labels:
-    out = morphology.binary_closing(_as_mask(mask), morphology.disk(radius))
+def binary_close(
+    mask: Labels, iterations: Annotated[int, Param(label="itérations", min=1, max=50)] = 1
+) -> Labels:
+    """Dilatation puis érosion (3×3, répétées) : bouche les petits trous et fissures."""
+    out = ndi.binary_closing(_as_mask(mask), structure=_SQUARE, iterations=iterations)
     return Labels(out.astype(np.uint8), mask.pixel_size_um, f"{mask.name} (fermé)")
 
 

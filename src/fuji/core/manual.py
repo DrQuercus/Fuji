@@ -78,7 +78,7 @@ class ManualStateDevice(_ManualMixin, StateDevice):
         if not labels:
             raise ValueError(f"{name} : au moins une position est nécessaire")
         self._labels = [str(lbl) for lbl in labels]
-        self._state = self.index_of(initial)
+        self._state = self._check_index(self.index_of(initial))
         self._prompt = prompt
 
     @property
@@ -95,9 +95,7 @@ class ManualStateDevice(_ManualMixin, StateDevice):
 
     def declare_state(self, index_or_label: int | str) -> None:
         """L'utilisateur indique la position actuelle (sans consigne)."""
-        index = self.index_of(index_or_label)
-        if not 0 <= index < len(self._labels):
-            raise IndexError(index)
+        index = self._check_index(self.index_of(index_or_label))
         self._state = index
         self.state_changed.emit(index, self._labels[index])
 

@@ -22,6 +22,7 @@ import inspect
 import logging
 import types
 import typing
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from importlib.metadata import entry_points
@@ -142,9 +143,15 @@ def _load_all() -> None:
             log.exception("Impossible de charger les opérations externes %s", ep.name)
 
 
+def _sort_key(text: str) -> str:
+    """Ordre alphabétique français : « Érosion » se range à E, pas après Z."""
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(c for c in decomposed if not unicodedata.combining(c)).casefold()
+
+
 def list_operations(category: str | None = None) -> list[Operation]:
     _load_all()
-    ops = sorted(_REGISTRY.values(), key=lambda o: (o.category, o.name))
+    ops = sorted(_REGISTRY.values(), key=lambda o: (_sort_key(o.category), _sort_key(o.name)))
     return [o for o in ops if category is None or o.category == category]
 
 

@@ -26,12 +26,16 @@ def _slug(text: str) -> str:
 
 def average_frames(microscope: Microscope, n: int = 8) -> np.ndarray:
     """Moyenne de ``n`` images (réduit le bruit des références)."""
-    acc = None
+    acc: np.ndarray | None = None
     for _ in range(n):
-        img = microscope.snap().data.astype(np.float64)
-        acc = img if acc is None else acc + img
+        img = microscope.snap().data
+        if acc is None:
+            acc = img.astype(np.float32)  # float32 : une image 4K couleur en float64 = 600 Mo
+        else:
+            acc += img
     assert acc is not None
-    return (acc / n).astype(np.float32)
+    acc /= n
+    return acc
 
 
 class FlatFieldStore:

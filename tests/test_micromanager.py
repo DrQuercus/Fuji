@@ -107,3 +107,48 @@ def test_micromanager_devices_are_wrapped(mm_core):
         assert scope.xy_stage.get_position() == pytest.approx((100, -50))
         scope.set_objective("40X")
         assert scope.objective.magnification == 40
+
+
+def _mm_profile(core) -> MicroscopeProfile:  # type: ignore[no-untyped-def]
+    return MicroscopeProfile(
+        name="MM", devices=[{"name": "mm", "driver": "micromanager", "options": {"core": core}}]
+    )
+
+
+def test_external_core_is_not_unloaded(mm_core):
+    """Un cœur fourni par l'appelant (autre logiciel) reste utilisable après la déconnexion."""
+    with Microscope(_mm_profile(mm_core)) as scope:
+        scope.snap()
+    assert "Cam" in mm_core.getLoadedDevices()
+    mm_core.snapImage()  # toujours fonctionnel
+
+
+def test_snap_while_live_and_live_stops_cleanly(mm_core):
+    with Microscope(_mm_profile(mm_core)) as scope:
+        cam = scope.camera
+        cam.start_live()
+        try:
+            cam.wait_for_frame(cam.latest_frame()[0], timeout=5)
+            img = scope.snap().data  # « snapImage » serait refusé pendant la séquence
+            assert img.shape == (24, 32) and int(img.max()) == 1234
+        finally:
+            cam.stop_live()
+        assert not cam.is_live and not mm_core.isSequenceRunning()
+        assert int(scope.snap().data.max()) == 1234  # la caméra n'est pas restée « occupée »
+
+
+def test_live_thread_failure_does_not_leave_camera_busy(mm_core, monkeypatch):
+    with Microscope(_mm_profile(mm_core)) as scope:
+        cam = scope.camera
+
+        def boom(*_a, **_k):  # type: ignore[no-untyped-def]
+            raise RuntimeError("tampon perdu")
+
+        monkeypatch.setattr(mm_core, "getRemainingImageCount", boom)
+        cam.start_live()
+        cam._live_thread.join(timeout=10)  # le thread abandonne après quelques erreurs
+        assert not cam.is_live
+        monkeypatch.undo()
+        cam.stop_live()  # doit quand même arrêter la séquence Micro-Manager
+        assert not mm_core.isSequenceRunning()
+        assert int(scope.snap().data.max()) == 1234

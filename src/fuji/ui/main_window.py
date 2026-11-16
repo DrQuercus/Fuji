@@ -22,7 +22,7 @@ from typing import Any
 import numpy as np
 from napari.components import ViewerModel
 from napari.qt import QtViewer
-from qtpy.QtCore import QSettings, Qt
+from qtpy.QtCore import QSettings, Qt, Signal
 from qtpy.QtGui import QAction, QKeySequence
 from qtpy.QtWidgets import (
     QApplication,
@@ -79,6 +79,17 @@ SUBTITLES = {
 TITLES = {key: title for key, title, _icon, _bottom in SECTIONS}
 TITLES.update(control="Contrôle du microscope", config="Microscopes")
 
+#: Au-delà de cette taille, un TIFF est lu à la demande au lieu d'être chargé en mémoire.
+_MEMMAP_BYTES = 1 << 30
+_CHANNEL_COLORMAPS = ("green", "magenta", "cyan", "yellow", "red", "blue")
+
+
+def _scale_bar(viewer: ViewerModel) -> Any:
+    """La barre d'échelle (son emplacement a changé avec napari 0.9)."""
+    overlays = getattr(getattr(viewer, "canvas", None), "overlays", None)
+    bar = getattr(overlays, "scale_bar", None)
+    return bar if bar is not None else viewer.scale_bar
+
 
 def _scroll(widget: QWidget) -> QScrollArea:
     area = QScrollArea()
@@ -104,6 +115,10 @@ class LayersPanel(QWidget):
 
 
 class MainWindow(QMainWindow):
+    #: objectif, canal ou calibration modifiés. Les signaux du microscope peuvent venir du
+    #: thread d'acquisition : ce signal Qt ramène la mise à jour dans le thread de l'interface.
+    _optics_changed = Signal()
+
     def __init__(self, microscope: Microscope) -> None:
         super().__init__()
         self.settings = QSettings("Fuji", "Fuji")
@@ -112,10 +127,13 @@ class MainWindow(QMainWindow):
         self._frame_counter = 0
         self.m: Microscope | None = None
         self.live: LiveController | None = None
+        self._acquiring = False
+        self._live_before_acq = False
+        self._optics_changed.connect(self._update_optics)
 
         # visualisation napari ---------------------------------------------------
         self.viewer = ViewerModel(title="Fuji")
-        self.viewer.scale_bar.visible = True
+        _scale_bar(self.viewer).visible = True
         self.qt_viewer = QtViewer(self.viewer)
         self._apply_viewer_theme()
         ThemeManager.get().changed.connect(self._on_theme_changed)
@@ -221,6 +239,8 @@ class MainWindow(QMainWindow):
         """(Re)construit tout ce qui dépend du microscope : panneaux, live, barre rapide."""
         if self.m is not None:
             self._teardown()
+        self._acquiring = False
+        self._live_before_acq = False
         self.m = scope
         scope.manual_handler = self.manual_handler
         self.live = LiveController(scope, self.viewer, self)
@@ -240,6 +260,7 @@ class MainWindow(QMainWindow):
         self.assistants = AssistantsPanel(scope, self.viewer, self.live)
         self._set_page("assistants", _scroll(self.assistants))
         self.acquisition = AcquisitionPanel(scope)
+        self.acquisition.starting.connect(self._on_acq_starting)
         self.acquisition.frame_ready.connect(self._on_acq_frame)
         self.acquisition.acquisition_done.connect(self._on_acq_done)
         self.acquisition.bridge.progress.connect(lambda d, t: self.topbar.set_acquisition(d, t, True))
@@ -258,12 +279,13 @@ class MainWindow(QMainWindow):
         self.quickbar.message.connect(self.notify)
         self.canvas_layout.addWidget(self.quickbar)
 
-        scope.objective_changed.connect(lambda *_: self._update_optics())
-        scope.channel_changed.connect(lambda *_: self._update_optics())
-        scope.profile_changed.connect(self._update_optics)
+        scope.objective_changed.connect(self._emit_optics_changed)
+        scope.channel_changed.connect(self._emit_optics_changed)
+        scope.profile_changed.connect(self._emit_optics_changed)
         self.setWindowTitle(f"Fuji — {scope.profile.name}")
         self._refresh_profiles()
         self._update_optics()
+        self._set_hardware_controls_enabled(True)
         if hasattr(self, "_expert"):
             self.set_expert(self._expert)
 
@@ -272,12 +294,22 @@ class MainWindow(QMainWindow):
 
         Tolère les objets Qt déjà détruits (fermeture de l'application).
         """
+        # débloquer un thread qui attendrait une réponse à une consigne manuelle
+        self.manual_handler.abort_pending()
         try:
             if hasattr(self, "acquisition") and self.acquisition.engine.is_running:
                 self.acquisition.engine.cancel()
                 self.acquisition.engine.wait(5)
         except RuntimeError:
             pass
+        # arrêter les minuteurs des panneaux : ils interrogeraient un matériel déconnecté
+        for name in ("control", "assistants"):
+            panel = getattr(self, name, None)
+            try:
+                if panel is not None:
+                    panel.shutdown()
+            except RuntimeError:
+                pass
         if self.live is not None:
             try:
                 self.live.stop()
@@ -287,6 +319,7 @@ class MainWindow(QMainWindow):
             self.live = None
         if self.quickbar is not None:
             try:
+                self.quickbar.shutdown()
                 self.canvas_layout.removeWidget(self.quickbar)
                 self.quickbar.deleteLater()
             except RuntimeError:
@@ -325,45 +358,74 @@ class MainWindow(QMainWindow):
         self.topbar.set_profiles(entries, current)
         self.topbar.status.setText("manuel" if any(d.manual for d in self.m.devices.values()) else "motorisé")
 
-    def switch_profile(self, path: str) -> None:
+    def switch_profile(self, path: str, *, force: bool = False) -> None:
+        """Passe au microscope du profil ``path`` (``force`` : même si c'est déjà lui)."""
         if not path or path == "__courant__":
             return
-        if (
+        same = (
             self.m is not None
             and self.m.profile_path is not None
             and Path(path).resolve() == self.m.profile_path.resolve()
-        ):
+        )
+        if same and not force:
             return
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            new = Microscope.from_file(path)
-            new.connect()
-        except Exception as exc:
-            QApplication.restoreOverrideCursor()
-            QMessageBox.warning(
-                self, "Connexion impossible", f"Impossible de se connecter à ce microscope :\n\n{exc}"
-            )
+        if self._refuse_while_acquiring("changer de microscope"):
             self._refresh_profiles()
             return
-        QApplication.restoreOverrideCursor()
-        self.set_microscope(new)
-        self.settings.setValue("last_profile", str(new.profile_path))
-        self.notify(f"Microscope : {new.profile.name}")
+        self._connect_profile(path)
 
     def reload_microscope(self) -> None:
         if self.m is None or self.m.profile_path is None:
             return
-        path = str(self.m.profile_path)
-        self._teardown()
-        self.m = None
+        if self._refuse_while_acquiring("reconnecter le microscope"):
+            return
+        self._connect_profile(str(self.m.profile_path))
+
+    def _refuse_while_acquiring(self, what: str) -> bool:
+        if not self._acquiring:
+            return False
+        QMessageBox.information(self, "Acquisition en cours", f"Arrêtez d'abord l'acquisition pour {what}.")
+        return True
+
+    def _connect_profile(self, path: str) -> None:
+        """Ferme le microscope actuel, puis ouvre celui du profil ``path``.
+
+        L'ancien est fermé **avant** d'ouvrir le nouveau : deux profils peuvent décrire le
+        même appareil (la même caméra ne s'ouvre qu'une fois). Si la connexion échoue, on
+        revient au microscope précédent et, à défaut, au simulateur.
+        """
+        previous = str(self.m.profile_path) if self.m is not None and self.m.profile_path else None
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        failure: Exception | None = None
+        new: Microscope | None = None
         try:
-            new = Microscope.from_file(path)
-            new.connect()
-        except Exception as exc:
-            QMessageBox.warning(self, "Connexion impossible", str(exc))
-            new = Microscope.from_file("demo")
-            new.connect()
+            self._teardown()
+            self.m = None
+            for candidate in dict.fromkeys(c for c in (path, previous, "demo") if c):
+                try:
+                    scope = Microscope.from_file(candidate)
+                    scope.connect()
+                except Exception as exc:
+                    if failure is None:
+                        failure = exc
+                    continue
+                new = scope
+                break
+        finally:
+            QApplication.restoreOverrideCursor()
+        if new is None:  # même le simulateur a échoué : installation cassée
+            raise RuntimeError(f"Aucun microscope utilisable : {failure}")
         self.set_microscope(new)
+        if failure is None:
+            self.settings.setValue("last_profile", str(new.profile_path))
+            self.notify(f"Microscope : {new.profile.name}")
+        else:
+            QMessageBox.warning(
+                self,
+                "Connexion impossible",
+                f"Impossible de se connecter à ce microscope :\n\n{failure}\n\n"
+                f"Fuji utilise « {new.profile.name} » en attendant.",
+            )
 
     def edit_profile(self, path: Path | None = None) -> None:
         assert self.m is not None
@@ -400,9 +462,7 @@ class MainWindow(QMainWindow):
             QMessageBox.question(self, "Configuration enregistrée", question)
             == QMessageBox.StandardButton.Yes
         ):
-            if self.m is not None:
-                self.m.profile_path = None  # forcer la reconnexion
-            self.switch_profile(str(path))
+            self.switch_profile(str(path), force=True)
         else:
             self._refresh_profiles()
             self.config_panel.refresh()
@@ -482,7 +542,7 @@ class MainWindow(QMainWindow):
         m_file.addAction(quit_)
 
         m_scope = mb.addMenu("&Microscope")
-        m_scope.addAction(self._action("Live", lambda: self.live and self.live.toggle(), "Ctrl+L"))
+        m_scope.addAction(self._action("Live", self._toggle_live, "Ctrl+L"))
         m_scope.addAction(self._action("Capturer", self.snap, "Ctrl+K"))
         m_scope.addSeparator()
         m_scope.addAction(self._action("Reconnecter", self.reload_microscope))
@@ -515,6 +575,24 @@ class MainWindow(QMainWindow):
         if value:
             self.statusBar().showMessage(str(value))
 
+    def _emit_optics_changed(self, *_: object) -> None:
+        try:
+            self._optics_changed.emit()
+        except RuntimeError:  # fenêtre déjà détruite
+            pass
+
+    def _set_hardware_controls_enabled(self, on: bool) -> None:
+        """(Dé)verrouille tout ce qui commande le matériel depuis l'interface."""
+        widgets: list[Any] = [self.topbar.live, self.topbar.capture, self.topbar.profile_combo]
+        widgets += [getattr(self, n, None) for n in ("control_tabs", "assistants", "config_panel")]
+        widgets.append(self.quickbar)
+        for w in widgets:
+            try:
+                if w is not None:
+                    w.setEnabled(on)
+            except RuntimeError:  # objet Qt déjà détruit
+                pass
+
     def _update_optics(self) -> None:
         if self.m is None:
             return
@@ -528,8 +606,12 @@ class MainWindow(QMainWindow):
         parts.append(f"{px:.4f} µm/px ({self.m.pixel_size_source()})" if px else "non calibré")
         self.optics_label.setText("  ·  ".join(parts))
 
+    def _toggle_live(self) -> None:
+        if self.live is not None and not self._acquiring:
+            self.live.toggle()
+
     def _live_toggled(self, on: bool) -> None:
-        if self.live is None:
+        if self.live is None or self._acquiring:
             return
         if on and not self.live.running:
             self.live.start()
@@ -550,23 +632,31 @@ class MainWindow(QMainWindow):
     def snap(self) -> None:
         if self.m is None:
             return
+        if self._acquiring:
+            self.notify("Acquisition en cours : capture indisponible")
+            return
         self.topbar.capture.setEnabled(False)
         worker = create_worker(self.m.snap, _start_thread=False)
         worker.returned.connect(self._on_snap)
         worker.errored.connect(lambda e: QMessageBox.warning(self, "Capture", str(e)))
-        worker.finished.connect(lambda: self.topbar.capture.setEnabled(True))
+        worker.finished.connect(lambda: self.topbar.capture.setEnabled(not self._acquiring))
         worker.start()
 
     def _on_snap(self, frame: Frame) -> None:
         self._captures += 1
-        data = self.assistants.illumination.correct(frame.data)
-        self.add_frame(
-            data, f"Capture {self._captures}", frame.metadata.to_dict(), frame.metadata.pixel_size_um
-        )
+        data, corrected = self.assistants.illumination.correct(frame.data)
+        metadata = frame.metadata.to_dict()
+        note = ""
+        if corrected:
+            metadata["flat_field_corrected"] = True
+            note = " · champ plat corrigé"
+        elif corrected is False:
+            note = " · ⚠ champ plat NON appliqué (pas de référence pour cet objectif et ce canal)"
+        self.add_frame(data, f"Capture {self._captures}", metadata, frame.metadata.pixel_size_um)
         if self.quickbar is not None:
             self.quickbar.show_frame(data)
         md = frame.metadata
-        self.notify(f"Capture {self._captures} : {md.channel or ''} {md.exposure_ms or 0:.1f} ms")
+        self.notify(f"Capture {self._captures} : {md.channel or ''} {md.exposure_ms or 0:.1f} ms{note}")
 
     def add_frame(
         self,
@@ -589,12 +679,26 @@ class MainWindow(QMainWindow):
         layer.metadata.update(metadata or {})
         layer.metadata["pixel_size_um"] = pixel_size_um
 
+    def _on_acq_starting(self) -> None:
+        """Juste avant une acquisition : le live s'arrête et les réglages se verrouillent,
+        pour que rien d'autre ne commande le matériel pendant la séquence."""
+        self._acquiring = True
+        self._live_before_acq = self.live is not None and self.live.running
+        if self._live_before_acq and self.live is not None:
+            self.live.stop()
+        self._set_hardware_controls_enabled(False)
+
     def _on_acq_frame(self, _event: Any, frame: Frame) -> None:
         if self.live is not None:
             self.live.show_frame(frame.data, "Acquisition")
 
     def _on_acq_done(self, summary: Any) -> None:
         self.topbar.set_acquisition(0, 0, False)
+        self._acquiring = False
+        self._set_hardware_controls_enabled(True)
+        if self._live_before_acq and self.live is not None and self.m is not None and self.m.connected:
+            self.live.start()
+        self._live_before_acq = False
         if summary.files and not summary.error:
             answer = QMessageBox.question(
                 self, "Acquisition terminée", f"{summary.acquired} images enregistrées.\nOuvrir le résultat ?"
@@ -614,7 +718,7 @@ class MainWindow(QMainWindow):
             self.open_file(path)
 
     def open_file(self, path: str | Path) -> None:
-        from fuji.analysis import Image
+        from fuji.analysis.image import read_pixel_size_um
 
         path = Path(path)
         try:
@@ -623,8 +727,16 @@ class MainWindow(QMainWindow):
 
                 with tifffile.TiffFile(path) as tif:
                     series = tif.series[0]
-                    axes, data = series.axes, series.asarray()
-                px = Image.from_file(path).pixel_size_um
+                    axes = series.axes
+                    px = read_pixel_size_um(tif)
+                    data = None
+                    if series.size * series.dtype.itemsize > _MEMMAP_BYTES:
+                        try:  # grande acquisition : les plans sont lus à la demande
+                            data = tifffile.memmap(path, mode="r")
+                        except Exception:  # fichier compressé ou en mosaïque
+                            data = None
+                    if data is None:
+                        data = series.asarray()
             else:
                 from skimage import io
 
@@ -633,18 +745,37 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Ouvrir", f"Impossible de lire {path.name} : {exc}")
             return
         rgb = axes.endswith("S") or (not axes and data.ndim == 3 and data.shape[-1] in (3, 4))
-        kwargs: dict[str, Any] = {"name": path.stem.replace(".ome", ""), "rgb": rgb}
+        name = path.stem.replace(".ome", "")
         scale = [1.0] * (data.ndim - (1 if rgb else 0))
         if px:
             scale[-1] = scale[-2] = px
+        kwargs: dict[str, Any] = {"rgb": rgb}
         if "C" in axes and not rgb:
             c_axis = axes.index("C")
-            kwargs["channel_axis"] = c_axis
             scale.pop(c_axis)
-        kwargs["scale"] = scale
-        if px:
-            kwargs["units"] = ("µm",) * len(scale)
-        layers = self.viewer.add_image(data, **kwargs)
+            if isinstance(data, np.memmap):
+                # un calque par canal, sans copie (napari chargerait tout en mémoire)
+                planes = [data[(slice(None),) * c_axis + (i,)] for i in range(data.shape[c_axis])]
+                layers = [
+                    self.viewer.add_image(
+                        plane,
+                        name=f"{name} [C{i + 1}]",
+                        scale=scale,
+                        units=("µm",) * len(scale) if px else None,
+                        blending="additive",
+                        colormap=_CHANNEL_COLORMAPS[i % len(_CHANNEL_COLORMAPS)],
+                    )
+                    for i, plane in enumerate(planes)
+                ]
+            else:
+                kwargs["channel_axis"] = c_axis
+                layers = None
+        else:
+            layers = None
+        if layers is None:
+            if px:
+                kwargs["units"] = ("µm",) * len(scale)
+            layers = self.viewer.add_image(data, name=name, scale=scale, **kwargs)
         for layer in layers if isinstance(layers, list) else [layers]:
             layer.metadata["pixel_size_um"] = px
             layer.metadata["source"] = str(path)
@@ -661,8 +792,12 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
-        img = layer_to_image(layer)
-        save_image(path, img.data, pixel_size_um=img.pixel_size_um)
+        try:
+            img = layer_to_image(layer)
+            save_image(path, img.data, pixel_size_um=img.pixel_size_um)
+        except Exception as exc:
+            QMessageBox.warning(self, "Enregistrer", f"Enregistrement impossible : {exc}")
+            return
         self.notify(f"Enregistré : {path}")
 
     def show_table(self, table: Table) -> None:
@@ -722,6 +857,13 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event: Any) -> None:
+        if self._acquiring and not getattr(self, "_closed", False):
+            answer = QMessageBox.question(
+                self, "Acquisition en cours", "Une acquisition est en cours. L'arrêter et quitter ?"
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
         if not getattr(self, "_closed", False):
             self._closed = True
             self.settings.setValue("window_geometry", self.saveGeometry())

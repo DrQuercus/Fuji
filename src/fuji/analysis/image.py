@@ -66,26 +66,65 @@ class Image:
 
     @classmethod
     def from_file(cls, path: str | Path) -> Image:
+        """Lit une image (TIFF, OME-TIFF, TIFF ImageJ, PNG, JPEG...) avec sa calibration."""
+        path = Path(path)
+        name = path.name.removesuffix(path.suffix).removesuffix(".ome")
+        if path.suffix.lower() not in (".tif", ".tiff"):
+            from skimage import io
+
+            return cls(np.asarray(io.imread(path)), None, name)
         import tifffile
 
-        path = Path(path)
         with tifffile.TiffFile(path) as tif:
             data = tif.series[0].asarray()
-            px = None
-            if tif.is_ome and tif.ome_metadata:
-                import re
+            px = read_pixel_size_um(tif)
+        return cls(data, px, name)
 
-                m = re.search(r'PhysicalSizeX="([0-9.eE+-]+)"', tif.ome_metadata)
-                if m:
-                    px = float(m.group(1))
-            elif tif.is_imagej:
-                page = tif.pages[0]
-                tag = page.tags.get("XResolution")
-                if tag is not None:
-                    num, den = tag.value
-                    if num:
-                        px = den / num
-        return cls(data, px, path.stem.replace(".ome", ""))
+
+#: Facteur de conversion vers le micromètre des unités rencontrées dans les fichiers.
+#: ImageJ écrit « micron », ou « µm » sous la forme échappée ``\\u00B5m``.
+_TO_UM = {
+    "µm": 1.0,
+    "\u03bcm": 1.0,  # mu grec
+    "\\u00b5m": 1.0,
+    "um": 1.0,
+    "micron": 1.0,
+    "microns": 1.0,
+    "micrometer": 1.0,
+    "micrometre": 1.0,
+    "nm": 1e-3,
+    "mm": 1e3,
+    "cm": 1e4,
+    "m": 1e6,
+    "inch": 25400.0,
+    "in": 25400.0,
+}
+
+
+def read_pixel_size_um(tif: Any) -> float | None:
+    """Taille du pixel (µm) d'un TIFF ouvert, d'après ses métadonnées OME ou ImageJ.
+
+    Renvoie ``None`` si le fichier n'est pas calibré ou si son unité est inconnue,
+    plutôt qu'une valeur fausse.
+    """
+    import re
+
+    if tif.is_ome and tif.ome_metadata:
+        m = re.search(r'PhysicalSizeX="([0-9.eE+-]+)"', tif.ome_metadata)
+        if not m:
+            return None
+        u = re.search(r'PhysicalSizeXUnit="([^"]+)"', tif.ome_metadata)
+        factor = _TO_UM.get(u.group(1).strip().lower() if u else "µm")
+        return float(m.group(1)) * factor if factor else None
+    if tif.is_imagej:
+        tag = tif.pages[0].tags.get("XResolution")
+        unit = str((tif.imagej_metadata or {}).get("unit", "")).strip().lower()
+        factor = _TO_UM.get(unit)
+        if tag is None or factor is None:
+            return None
+        num, den = tag.value
+        return den / num * factor if num else None
+    return None
 
 
 @dataclass
@@ -99,7 +138,9 @@ class Labels:
 
     @property
     def is_binary(self) -> bool:
-        return int(self.data.max(initial=0)) <= 1
+        """Vrai si l'image ne contient qu'une seule valeur non nulle (masque 0/1, 0/255...)."""
+        top = self.data.max(initial=0)
+        return bool(top <= 1) or not bool(((self.data != 0) & (self.data != top)).any())
 
     @property
     def count(self) -> int:
@@ -131,7 +172,8 @@ class Table:
         path = Path(path)
         df = self.data.copy()
         df.columns = [f"{c} ({self.units[c]})" if self.units.get(c) else c for c in df.columns]
-        df.to_csv(path, index_label=" ")
+        # « utf-8-sig » : Excel reconnaît l'encodage et affiche correctement « µm² »
+        df.to_csv(path, index_label=" ", encoding="utf-8-sig")
         return path
 
     def __len__(self) -> int:

@@ -89,11 +89,19 @@ class Microscope:
         ctx = DriverContext(self.profile, self.devices)
         try:
             for spec in self.profile.devices:
-                for dev in create_devices(spec, ctx):
-                    if dev.name in self.devices:
-                        raise ValueError(f"Nom de périphérique en double : {dev.name!r}")
-                    if not dev.initialized:
-                        dev.initialize()
+                created = create_devices(spec, ctx)
+                for i, dev in enumerate(created):
+                    try:
+                        if dev.name in self.devices:
+                            raise ValueError(f"Nom de périphérique en double : {dev.name!r}")
+                        if not dev.initialized:
+                            dev.initialize()
+                    except Exception:
+                        # ne pas laisser de matériel ouvert (caméra « occupée » au prochain essai)
+                        for orphan in created[i:]:
+                            with contextlib.suppress(Exception):
+                                orphan.shutdown()
+                        raise
                     self.devices[dev.name] = dev
             self._resolve_roles()
         except Exception:
@@ -233,7 +241,8 @@ class Microscope:
         return self._pixel_size()[0]
 
     def pixel_size_source(self) -> str | None:
-        """« calibré », « estimé » ou ``None``."""
+        """« calibré » (micromètre objet), « configuré » (Micro-Manager), « estimé »
+        (photosite / grossissement) ou ``None``."""
         return self._pixel_size()[1]
 
     def _pixel_size(self) -> tuple[float | None, str | None]:
@@ -285,8 +294,10 @@ class Microscope:
         if ch.mm_config is not None:
             self._apply_mm_config(*ch.mm_config)
         # éteindre les sources utilisées par les autres canaux
-        others = {n for c in self.profile.channels if c.name != name for n in c.lights} - set(ch.lights)
-        for dev_name in others:
+        others = dict.fromkeys(
+            n for c in self.profile.channels if c.name != name for n in c.lights if n not in ch.lights
+        )
+        for dev_name in others:  # ordre du profil : consignes toujours dans le même ordre
             dev = self.device(dev_name, LightSource)
             if dev.is_on():
                 dev.set_on(False)

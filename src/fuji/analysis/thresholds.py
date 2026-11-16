@@ -1,11 +1,17 @@
 """Méthodes de seuillage automatique, avec les noms et conventions d'ImageJ.
 
-« Default » reproduit l'algorithme IsoData modifié d'ImageJ (celui de la fenêtre
+« Default » transcrit l'algorithme IsoData modifié d'ImageJ (celui de la fenêtre
 Image > Adjust > Threshold en mode « Default »). Les autres méthodes viennent de
 scikit-image, sur l'histogramme à 256 classes comme dans ImageJ.
+
+Sur une image 8 bits (ou RGB 8 bits), les masques sont ceux d'ImageJ. Sur 16 bits ou
+32 bits, ImageJ ramène d'abord l'image à 256 niveaux avec ses propres arrondis : le seuil
+peut alors différer d'une classe (1/256 de la dynamique).
 """
 
 from __future__ import annotations
+
+import math
 
 import numpy as np
 from skimage import filters
@@ -52,7 +58,7 @@ def ij_default_level(hist: np.ndarray) -> int:
         moving += 1
         if not ((moving + 1) <= result and moving < hi - 1):
             break
-    return int(round(result))
+    return math.floor(result + 0.5)  # Math.round de Java (Python arrondit au pair)
 
 
 def threshold_value(values: np.ndarray, method: str = "Default") -> float:

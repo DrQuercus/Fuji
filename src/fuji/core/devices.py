@@ -119,6 +119,7 @@ class Camera(Device):
     def __init__(self, name: str, **kwargs: Any) -> None:
         super().__init__(name, **kwargs)
         self._latest: np.ndarray | None = None
+        self._latest_time = 0.0  # instant d'arrivée (time.monotonic) de la dernière image
         self._frame_count = 0
         self._frame_cond = threading.Condition()
         self._live_thread: threading.Thread | None = None
@@ -162,7 +163,9 @@ class Camera(Device):
         return None
 
     @property
-    def binning(self) -> int:
+    def binning(self) -> float:
+        """Facteur par lequel le pixel image est plus grand que le photosite (binning
+        ou résolution réduite du capteur). La calibration du pixel en tient compte."""
         return 1
 
     # gain (optionnel)
@@ -197,6 +200,36 @@ class Camera(Device):
         self._publish(img)
         return img
 
+    def auto_expose(self, target: float = 0.7, *, max_iterations: int = 8) -> float:
+        """Règle l'exposition pour que les hautes lumières atteignent ``target`` (fraction
+        de la dynamique). Renvoie l'exposition choisie (ms).
+
+        Une image saturée ne dit pas de combien réduire, une image noire de combien
+        augmenter : dans ces cas on corrige d'un facteur fixe, puis on vérifie sur une
+        nouvelle image jusqu'à ce que la correction devienne négligeable.
+        """
+        maxval = 2**self.bit_depth - 1
+        lo, hi = self.exposure_limits()
+        changed = False
+        for _ in range(max_iterations):
+            if changed:
+                self.snap()  # image encore prise avec l'ancien réglage sur certaines caméras
+            frame = self.snap()
+            p = float(np.percentile(frame[::4, ::4], 99.5))
+            if p >= 0.98 * maxval:
+                factor = 0.25
+            elif p <= 0.02 * maxval:
+                factor = 8.0
+            else:
+                factor = target * maxval / p
+            current = self.get_exposure()
+            new = float(np.clip(current * factor, lo, hi))
+            if abs(new - current) <= 0.05 * current:
+                break
+            self.set_exposure(new)
+            changed = True
+        return self.get_exposure()
+
     def latest_frame(self) -> tuple[int, np.ndarray | None]:
         """Dernière image disponible et son numéro (pour le live sans copie)."""
         with self._frame_cond:
@@ -204,19 +237,28 @@ class Camera(Device):
 
     def wait_for_frame(self, after: int, timeout: float = 10.0) -> np.ndarray:
         """Attend une image de numéro strictement supérieur à ``after``."""
+        return self._wait_frame(after, timeout)[1]
+
+    def _wait_frame(self, after: int, timeout: float) -> tuple[int, np.ndarray, float]:
+        """Comme :meth:`wait_for_frame`, avec le numéro et l'instant d'arrivée de l'image."""
         deadline = time.monotonic() + timeout
         with self._frame_cond:
             while self._frame_count <= after:
+                self._check_alive()
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError(f"{self.name} : aucune image reçue en {timeout:.1f} s")
-                self._frame_cond.wait(remaining)
+                self._frame_cond.wait(min(remaining, 0.25))
             assert self._latest is not None
-            return self._latest
+            return self._frame_count, self._latest, self._latest_time
+
+    def _check_alive(self) -> None:
+        """Surchargée par les pilotes : lève une erreur claire si la caméra est perdue."""
 
     def _publish(self, img: np.ndarray) -> None:
         with self._frame_cond:
             self._latest = img
+            self._latest_time = time.monotonic()
             self._frame_count += 1
             self._frame_cond.notify_all()
         self.frame_ready.emit(img)
@@ -237,8 +279,11 @@ class Camera(Device):
 
     def stop_live(self) -> None:
         self._live_stop.set()
-        if self._live_thread is not None:
-            self._live_thread.join(timeout=max(2.0, self.get_exposure() / 1000 + 1.0))
+        thread = self._live_thread
+        if thread is not None:
+            thread.join(timeout=max(2.0, self.get_exposure() / 1000 * 2 + 1.0))
+            if thread.is_alive():  # exposition très longue : on garde la référence
+                return
         self._live_thread = None
 
     def _software_live_loop(self) -> None:
@@ -355,10 +400,14 @@ class StateDevice(Device):
     @abstractmethod
     def _set_state(self, index: int) -> None: ...
 
-    def set_state(self, index: int) -> None:
+    def _check_index(self, index: int) -> int:
         index = int(index)
         if not 0 <= index < len(self.labels):
             raise IndexError(f"{self.name} : position {index} invalide (0..{len(self.labels) - 1})")
+        return index
+
+    def set_state(self, index: int) -> None:
+        index = self._check_index(index)
         self._set_state(index)
         self.state_changed.emit(index, self.labels[index])
 

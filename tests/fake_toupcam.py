@@ -26,8 +26,10 @@ TOUPCAM_OPTION_RGB = 0x0C
 TOUPCAM_OPTION_BYTEORDER = 0x0D
 TOUPCAM_OPTION_BLACKLEVEL = 0x15
 TOUPCAM_OPTION_CG = 0x1A
+TOUPCAM_OPTION_FLUSH = 0x3D
 
 TOUPCAM_EVENT_IMAGE = 0x0004
+TOUPCAM_EVENT_TRIGGERFAIL = 0x0007
 TOUPCAM_EVENT_ERROR = 0x0080
 TOUPCAM_EVENT_DISCONNECTED = 0x0081
 
@@ -117,6 +119,12 @@ class Toupcam:
         self.awb_calls = 0
         self.frame_no = 0
         self.closed = False
+        #: Comportements à simuler dans les tests.
+        self.stale_frames_on_trigger = 0  # images « en transit » livrées juste après un Trigger
+        self.fail_next_trigger = False
+        self.scale_to_16_bits = False  # valeurs étalées sur 16 bits au lieu de 12
+        self.flushed = 0
+        self.fail_option: int | None = None  # put_Option(cette option) lève une erreur
         self._cb = None
         self._ctx = None
         self._running = False
@@ -133,6 +141,11 @@ class Toupcam:
         self.esize = i
 
     def put_Option(self, opt: int, value: int) -> None:
+        if opt == self.fail_option:
+            raise HRESULTException(0x80004001)
+        if opt == TOUPCAM_OPTION_FLUSH:
+            self.flushed += 1
+            return
         self.options[opt] = int(value)
         if opt == TOUPCAM_OPTION_TRIGGER:
             with self._cond:
@@ -219,9 +232,6 @@ class Toupcam:
     def put_Saturation(self, v: int) -> None:
         self.sat = v
 
-    def get_SerialNumber(self) -> str:
-        return "SN-TEST"
-
     # --- flux ---
     def StartPullModeWithCallback(self, cb, ctx) -> None:
         self._cb, self._ctx = cb, ctx
@@ -238,12 +248,25 @@ class Toupcam:
                     continue
                 if not video:
                     self._pending -= 1
-            time.sleep(min(self.expo_us / 1e6, 0.02))
+            time.sleep(self.expo_us / 1e6)  # une image n'arrive jamais avant la fin de la pose
             if self._running and self._cb is not None:
-                self.frame_no += 1
-                self._cb(TOUPCAM_EVENT_IMAGE, self._ctx)
+                self._emit_frame()
+
+    def _emit_frame(self) -> None:
+        self.frame_no += 1
+        self._cb(TOUPCAM_EVENT_IMAGE, self._ctx)
+
+    def emit_event(self, event: int) -> None:
+        self._cb(event, self._ctx)
 
     def Trigger(self, n: int) -> None:
+        if self.fail_next_trigger:
+            self.fail_next_trigger = False
+            threading.Timer(0.01, self.emit_event, (TOUPCAM_EVENT_TRIGGERFAIL,)).start()
+            return
+        for _ in range(self.stale_frames_on_trigger):  # image vidéo arrivée en retard
+            threading.Timer(0.001, self._emit_frame).start()
+        self.stale_frames_on_trigger = 0
         with self._cond:
             self._pending += n
             self._cond.notify_all()
@@ -266,7 +289,16 @@ class Toupcam:
         base = (np.arange(h * w * n).reshape(h, w, n) * 7 + self.frame_no) % (maxval + 1)
         dtype = np.uint16 if bits in (16, 48) else np.uint8
         out = base.astype(dtype)
+        if self.scale_to_16_bits and bits in (16, 48):
+            out = out << 4
         return out[..., 0] if mono else out
+
+    def PullImageV3(self, buf: bytes, still: int, bits: int, row_pitch: int, info: object) -> None:
+        assert still == 0 and row_pitch == 0
+        self.PullImageV2(buf, bits, info)
+
+    def SerialNumber(self) -> str:
+        return "SN-TEST"
 
     def PullImageV2(self, buf: bytes, bits: int, info: object) -> None:
         img = self.expected_frame(bits)

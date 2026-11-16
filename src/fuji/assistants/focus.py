@@ -17,16 +17,25 @@ if TYPE_CHECKING:
 METRICS = ("tenengrad", "laplacien", "variance normalisée", "brenner")
 
 
+def subsample_step(shape: tuple[int, ...], max_side: int | None) -> int:
+    """Pas de sous-échantillonnage pour que le plus grand côté ne dépasse pas ``max_side``."""
+    if not max_side:
+        return 1
+    return max(1, math.ceil(max(shape[:2]) / max_side))
+
+
 def to_gray(image: np.ndarray, max_side: int | None = 768) -> np.ndarray:
-    """Niveaux de gris float32, réduit par sous-échantillonnage pour la vitesse."""
-    g = image.astype(np.float32)
+    """Niveaux de gris float32, réduit par sous-échantillonnage pour la vitesse.
+
+    Le sous-échantillonnage est fait **avant** toute conversion : sur une image 4K
+    couleur, convertir d'abord coûterait plus de 100 Mo et figerait l'affichage.
+    Le pixel ``(i, j)`` du résultat correspond au pixel ``(i·pas, j·pas)`` de l'image.
+    """
+    step = subsample_step(image.shape, max_side)
+    g = image[::step, ::step] if step > 1 else image
     if g.ndim == 3:
-        g = g[..., :3].mean(axis=-1)
-    if max_side:
-        step = int(math.ceil(max(g.shape) / max_side))
-        if step > 1:
-            g = g[::step, ::step]
-    return g
+        return g[..., :3].mean(axis=-1, dtype=np.float32)
+    return g.astype(np.float32)
 
 
 def sharpness(image: np.ndarray, method: str = "tenengrad", *, max_side: int | None = 768) -> float:
@@ -47,14 +56,18 @@ def sharpness(image: np.ndarray, method: str = "tenengrad", *, max_side: int | N
     raise ValueError(f"Méthode inconnue {method!r} ; méthodes : {METRICS}")
 
 
-def focus_peaking(image: np.ndarray, percentile: float = 97.0) -> np.ndarray:
-    """Masque des zones les plus nettes (à superposer au live)."""
-    g = image.astype(np.float32)
-    if g.ndim == 3:
-        g = g[..., :3].mean(axis=-1)
-    g = ndi.gaussian_filter(g, 0.8)
+def focus_peaking(
+    image: np.ndarray, percentile: float = 97.0, *, max_side: int | None = 1024
+) -> tuple[np.ndarray, int]:
+    """Masque des zones les plus nettes (à superposer au live) et son pas d'échantillonnage.
+
+    Calculé sur une image réduite pour rester fluide : un pixel du masque couvre
+    ``pas × pas`` pixels de l'image.
+    """
+    step = subsample_step(image.shape, max_side)
+    g = ndi.gaussian_filter(to_gray(image, max_side), 0.8)
     mag = np.hypot(ndi.sobel(g, axis=1), ndi.sobel(g, axis=0))
-    return mag > np.percentile(mag, percentile)
+    return mag > np.percentile(mag, percentile), step
 
 
 @dataclass
@@ -117,15 +130,19 @@ def autofocus(
             vals.append(sharpness(microscope.snap().data, method))
         return zs, np.asarray(vals)
 
-    zs, vals = scan(z0, range_um / 2, step_um)
-    best = float(zs[int(np.argmax(vals))])
-    zs, vals = scan(best, step_um, step_um / 4)
-    i = int(np.argmax(vals))
-    z_best = float(zs[i])
-    if 0 < i < len(zs) - 1:  # sommet de la parabole passant par 3 points
-        y0, y1, y2 = vals[i - 1], vals[i], vals[i + 1]
-        denom = y0 - 2 * y1 + y2
-        if denom != 0:
-            z_best += 0.5 * (y0 - y2) / denom * (zs[1] - zs[0])
+    try:
+        zs, vals = scan(z0, range_um / 2, step_um)
+        best = float(zs[int(np.argmax(vals))])
+        zs, vals = scan(best, step_um, step_um / 4)
+        i = int(np.argmax(vals))
+        z_best = float(zs[i])
+        if 0 < i < len(zs) - 1:  # sommet de la parabole passant par 3 points
+            y0, y1, y2 = vals[i - 1], vals[i], vals[i + 1]
+            denom = y0 - 2 * y1 + y2
+            if denom != 0:
+                z_best += 0.5 * (y0 - y2) / denom * (zs[1] - zs[0])
+    except BaseException:
+        focus.move_to(z0)  # ne pas laisser la mise au point au milieu du balayage
+        raise
     focus.move_to(z_best)
     return z_best

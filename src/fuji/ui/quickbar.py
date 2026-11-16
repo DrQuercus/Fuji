@@ -80,6 +80,12 @@ class QuickBar(QWidget):
             obox.addWidget(section_title(title))
             self.objectives = Segmented()
             short = {lbl: lbl.split("/")[0].split(" ")[0] for lbl in changer.labels}
+            # deux objectifs de même grossissement (10x/0.25 et 10x/0.30 Ph) : nom complet,
+            # sinon l'un des deux boutons serait inutilisable
+            counts: dict[str, int] = {}
+            for text in short.values():
+                counts[text] = counts.get(text, 0) + 1
+            short = {lbl: (text if counts[text] == 1 else lbl) for lbl, text in short.items()}
             self._obj_short = short
             self.objectives.set_options(list(short.values()), {v: k for k, v in short.items()})
             self.objectives.selected.connect(self._objective_clicked)
@@ -109,6 +115,10 @@ class QuickBar(QWidget):
         self._timer.start()
         self.refresh()
 
+    def shutdown(self) -> None:
+        """Arrête le rafraîchissement avant la déconnexion du microscope."""
+        self._timer.stop()
+
     # ------------------------------------------------------------- exposition
     def _sync_slider(self, value: float) -> None:
         pos = (math.log10(max(value, 1e-3)) - self._log_lo) / (self._log_hi - self._log_lo) * 1000
@@ -128,21 +138,11 @@ class QuickBar(QWidget):
 
     def auto_exposure(self) -> None:
         cam = self.m.require_camera()
-        _, frame = cam.latest_frame()
-        if frame is None:
-            frame = cam.snap()
-        maxval = 2**cam.bit_depth - 1
-        p = float(np.percentile(frame[::4, ::4], 99.5))
-        if p <= 0:
+        try:
+            cam.auto_expose()
+        except Exception as exc:
+            self.message.emit(f"Exposition automatique impossible : {exc}")
             return
-        lo, hi = cam.exposure_limits()
-        for _ in range(2):  # deux itérations : la saturation fausse la première estimation
-            target = float(np.clip(cam.get_exposure() * 0.7 * maxval / max(p, 1), lo, hi))
-            cam.set_exposure(target)
-            if p < maxval * 0.98:
-                break
-            frame = cam.snap()
-            p = float(np.percentile(frame[::4, ::4], 99.5))
         self.message.emit(f"Exposition réglée à {cam.get_exposure():.1f} ms")
         self.refresh()
 

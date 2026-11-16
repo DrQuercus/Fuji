@@ -21,6 +21,7 @@ from qtpy.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from superqt.utils import create_worker
 
 from fuji.assistants import (
     FlatFieldStore,
@@ -162,12 +163,12 @@ class KohlerWidget(_LiveAssistant):
             self.sharp_bar.setValue(int(100 * g.best_edge_width_px / g.edge_width_px))
         else:
             self.sharp_bar.setVisible(False)
-        self._draw(g)
+        self._draw(g, frame.shape[:2])
 
-    def _draw(self, g) -> None:  # type: ignore[no-untyped-def]
+    def _draw(self, g, shape: tuple[int, int]) -> None:  # type: ignore[no-untyped-def]
         rep = g.report
         s = self._scale()
-        h, w = self.m.require_camera().sensor_shape()
+        h, w = shape
         shapes, types, colors = [], [], []
         # croix au centre de l'image
         c = np.array([h / 2, w / 2])
@@ -237,10 +238,11 @@ class FocusWidget(_LiveAssistant):
         self.peaking = QCheckBox("Surligner les zones nettes (focus peaking)")
         self.peaking.toggled.connect(lambda on: None if on else self._remove_peaking())
         lay.addWidget(self.peaking)
+        self._af_was_live = False
         if self.m.focus is not None and not self.m.focus.manual:
-            af = QPushButton("Autofocus")
-            af.clicked.connect(self._autofocus)
-            lay.addWidget(af)
+            self.af_button = QPushButton("Autofocus")
+            self.af_button.clicked.connect(self._autofocus)
+            lay.addWidget(self.af_button)
         else:
             lay.addWidget(
                 hint_label(
@@ -269,38 +271,63 @@ class FocusWidget(_LiveAssistant):
         self.bar.setValue(int(100 * st.relative))
         self.trend.setText(f"Tendance : {st.trend}")
         if self.peaking.isChecked():
-            mask = focus_peaking(frame).astype(np.uint8)
-            s = self._scale()
-            if PEAKING_LAYER in self.viewer.layers:
-                self.viewer.layers[PEAKING_LAYER].data = mask
-            else:
-                self.viewer.add_image(
-                    mask,
-                    name=PEAKING_LAYER,
-                    colormap="red",
-                    blending="additive",
-                    opacity=0.8,
-                    contrast_limits=(0, 1),
-                    scale=(s, s),
-                    units=self._units(),
-                )
+            mask, step = focus_peaking(frame)
+            self._show_peaking(mask.astype(np.uint8), step)
+
+    def _show_peaking(self, mask: np.ndarray, step: int) -> None:
+        """Le masque est calculé sur une image réduite : un de ses pixels couvre
+        ``step`` × ``step`` pixels de l'image."""
+        px = self._scale()
+        scale = (px * step, px * step)
+        translate = (px * (step - 1) / 2, px * (step - 1) / 2)
+        if PEAKING_LAYER in self.viewer.layers:
+            layer = self.viewer.layers[PEAKING_LAYER]
+            if layer.data.shape == mask.shape:
+                layer.data = mask
+                if tuple(layer.scale) != scale:  # changement d'objectif
+                    layer.scale = scale
+                    layer.translate = translate
+                return
+            self.viewer.layers.remove(PEAKING_LAYER)
+        self.viewer.add_image(
+            mask,
+            name=PEAKING_LAYER,
+            colormap="red",
+            blending="additive",
+            opacity=0.8,
+            contrast_limits=(0, 1),
+            scale=scale,
+            translate=translate,
+            units=self._units(),
+        )
 
     def _remove_peaking(self) -> None:
         if PEAKING_LAYER in self.viewer.layers:
             self.viewer.layers.remove(PEAKING_LAYER)
 
     def _autofocus(self) -> None:
-        was_live = self.live.running
-        if was_live:
+        """Balayage en Z dans un thread de travail : l'interface reste utilisable."""
+        self._af_was_live = self.live.running
+        if self._af_was_live:
             self.live.stop()
-        try:
-            z = autofocus(self.m)
-            self.message.emit(f"Autofocus : Z = {z:.2f} µm")
-        except Exception as exc:
-            QMessageBox.warning(self, "Autofocus", str(exc))
-        finally:
-            if was_live:
-                self.live.start()
+        self.af_button.setEnabled(False)
+        self.message.emit("Autofocus en cours…")
+        worker = create_worker(autofocus, self.m, _start_thread=False)
+        worker.returned.connect(self._autofocus_done)
+        worker.errored.connect(self._autofocus_failed)
+        worker.finished.connect(self._autofocus_finished)
+        worker.start()
+
+    def _autofocus_done(self, z: float) -> None:
+        self.message.emit(f"Autofocus : Z = {z:.2f} µm")
+
+    def _autofocus_failed(self, exc: Exception) -> None:
+        QMessageBox.warning(self, "Autofocus", str(exc))
+
+    def _autofocus_finished(self) -> None:
+        self.af_button.setEnabled(True)
+        if self._af_was_live and self.m.connected:
+            self.live.start()
 
 
 # ------------------------------------------------------------- calibration
@@ -326,10 +353,10 @@ class CalibrationWidget(QWidget):
         self.spacing.setValue(10.0)
         self.spacing.setSuffix(" µm")
         lay.addWidget(row(QLabel("Écart entre graduations"), self.spacing))
-        measure = QPushButton("Mesurer sur l'image actuelle")
-        measure.setObjectName("primary")
-        measure.clicked.connect(self._measure)
-        lay.addWidget(measure)
+        self.measure = QPushButton("Mesurer sur l'image actuelle")
+        self.measure.setObjectName("primary")
+        self.measure.clicked.connect(self._measure)
+        lay.addWidget(self.measure)
         self.result = QLabel()
         self.result.setWordWrap(True)
         lay.addWidget(self.result)
@@ -338,19 +365,41 @@ class CalibrationWidget(QWidget):
         self.save.clicked.connect(self._save)
         lay.addWidget(self.save)
         lay.addStretch(1)
+        #: objectif et binning au moment de la mesure : la calibration leur appartient
+        self._measured_for: tuple[str | None, float] = (None, 1)
 
-    def _measure(self) -> None:
+    def _grab_and_measure(self, spacing_um: float, use_live: bool):  # type: ignore[no-untyped-def]
         cam = self.m.require_camera()
-        _, frame = cam.latest_frame()
+        # image fraîche : la dernière image mémorisée peut dater d'un autre objectif
+        frame = cam.latest_frame()[1] if use_live else None
         if frame is None:
             frame = self.m.snap().data
-        try:
-            self._result = calibrate_micrometer(frame, self.spacing.value())
-        except Exception as exc:
-            self.result.setText(f"Échec : {exc}")
-            self.save.setEnabled(False)
-            return
-        r = self._result
+        return calibrate_micrometer(frame, spacing_um)
+
+    def _measure(self) -> None:
+        obj = self.m.objective
+        cam = self.m.require_camera()
+        self._measured_for = (obj.label if obj else None, cam.binning)
+        self._result = None
+        self.measure.setEnabled(False)
+        self.save.setEnabled(False)
+        self.result.setText("Mesure en cours…")
+        worker = create_worker(
+            self._grab_and_measure, self.spacing.value(), self.live.running, _start_thread=False
+        )
+        worker.returned.connect(self._measured)
+        worker.errored.connect(self._measure_failed)
+        worker.finished.connect(self._measure_finished)
+        worker.start()
+
+    def _measure_failed(self, exc: Exception) -> None:
+        self.result.setText(f"Échec : {exc}")
+
+    def _measure_finished(self) -> None:
+        self.measure.setEnabled(True)
+
+    def _measured(self, r) -> None:  # type: ignore[no-untyped-def]
+        self._result = r
         current = self.m.pixel_size_um()
         cmp = ""
         if current:
@@ -358,24 +407,54 @@ class CalibrationWidget(QWidget):
                 f"<br>Valeur actuelle : {current:.4f} µm ({self.m.pixel_size_source()}), "
                 f"écart {100 * (r.pixel_size_um / current - 1):+.1f} %"
             )
+        warn = ""
+        if not r.reliable:
+            warn = (
+                "<br><b>⚠ Mesure peu fiable</b> : il faut au moins 5 graduations nettes et "
+                "régulières. Cadrez plus de traits, refaites la mise au point, puis recommencez."
+            )
         self.result.setText(
             f"<b>{r.pixel_size_um:.4f} µm/pixel</b><br>{r.n_lines} traits, "
             f"période {r.period_px:.2f} px, rotation caméra {r.angle_deg:+.2f}°, "
-            f"incertitude ±{r.relative_uncertainty * 100:.2f} %{cmp}"
+            f"incertitude ±{r.relative_uncertainty * 100:.2f} %{cmp}{warn}"
         )
-        obj = self.m.objective
-        self.save.setEnabled(obj is not None)
+        label = self._measured_for[0]
+        self.save.setEnabled(label is not None)
         self.save.setText(
-            f"Enregistrer pour l'objectif {obj.label}" if obj else "Sélectionnez d'abord l'objectif en place"
+            f"Enregistrer pour l'objectif {label}" if label else "Sélectionnez d'abord l'objectif en place"
         )
 
     def _save(self) -> None:
-        if self._result is None:
+        r = self._result
+        label, binning = self._measured_for
+        if r is None or label is None:
             return
-        self.m.set_pixel_calibration(self._result.pixel_size_um)
+        cam = self.m.camera
+        if cam is not None and cam.binning != binning:
+            QMessageBox.information(
+                self,
+                "Calibration",
+                "La résolution de la caméra a changé depuis la mesure : refaites la mesure.",
+            )
+            return
+        if not r.reliable:
+            answer = QMessageBox.question(
+                self,
+                "Mesure peu fiable",
+                f"Seulement {r.n_lines} traits reconnus (incertitude "
+                f"±{r.relative_uncertainty * 100:.1f} %). Toutes les mesures faites avec cet "
+                "objectif en dépendront.\n\nEnregistrer quand même ?",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        try:
+            self.m.set_pixel_calibration(r.pixel_size_um, label)
+        except Exception as exc:
+            QMessageBox.warning(self, "Calibration", str(exc))
+            return
         try:
             path = self.m.save_profile()
-            self.message.emit(f"Calibration enregistrée dans {path}")
+            self.message.emit(f"Calibration de {label} enregistrée dans {path}")
         except Exception as exc:
             self.message.emit(f"Calibration appliquée (non enregistrée : {exc})")
         self.profile_saved.emit()
@@ -384,6 +463,8 @@ class CalibrationWidget(QWidget):
 # --------------------------------------------------------- éclairage, champ plat
 class IlluminationWidget(QWidget):
     message = Signal(str)
+    #: objectif ou canal changé (émis depuis n'importe quel thread, traité dans celui de l'interface)
+    _keys_changed = Signal()
 
     def __init__(
         self, microscope: Microscope, viewer: ViewerModel, live: LiveController, parent: QWidget | None = None
@@ -407,25 +488,36 @@ class IlluminationWidget(QWidget):
             "Champ plat",
             hint="Corrige le vignettage et l'éclairage inégal : indispensable pour mesurer des intensités.",
         )
-        flat = QPushButton("Acquérir le champ plat (lame vide)")
-        flat.clicked.connect(self._acquire_flat)
-        dark = QPushButton("Acquérir le noir (lumière coupée)")
-        dark.clicked.connect(self._acquire_dark)
+        self.flat_btn = QPushButton("Acquérir le champ plat (lame vide)")
+        self.flat_btn.clicked.connect(lambda: self._acquire("flat"))
+        self.dark_btn = QPushButton("Acquérir le noir (lumière coupée)")
+        self.dark_btn.clicked.connect(lambda: self._acquire("dark"))
         self.apply = QCheckBox("Corriger les captures")
+        self.apply.toggled.connect(self._refresh_status)
         self.status = QLabel()
         self.status.setWordWrap(True)
-        for w in (flat, dark, self.apply, self.status):
+        for w in (self.flat_btn, self.dark_btn, self.apply, self.status):
             blay.addWidget(w)
         lay.addWidget(box)
         lay.addStretch(1)
         self._dark: np.ndarray | None = None
+        self._pending: tuple[str, tuple[str | None, str | None]] | None = None
+        self._keys_changed.connect(self._refresh_status)
+        microscope.objective_changed.connect(self._on_keys_changed)
+        microscope.channel_changed.connect(self._on_keys_changed)
         self._refresh_status()
 
     def _keys(self) -> tuple[str | None, str | None]:
         obj = self.m.objective
         return (obj.label if obj else None), self.m.channel
 
-    def _refresh_status(self) -> None:
+    def _on_keys_changed(self, *_: object) -> None:
+        try:
+            self._keys_changed.emit()
+        except RuntimeError:  # panneau déjà détruit (changement de microscope)
+            pass
+
+    def _refresh_status(self, *_: object) -> None:
         ref = self.store.load(*self._keys())
         obj, ch = self._keys()
         self.status.setText(
@@ -435,7 +527,11 @@ class IlluminationWidget(QWidget):
         )
 
     def _uniformity(self) -> None:
-        frame = self.m.snap().data
+        try:
+            frame = self.m.snap().data
+        except Exception as exc:
+            QMessageBox.warning(self, "Éclairage", str(exc))
+            return
         rep = illumination_uniformity(frame)
         self.uni_text.setText(
             f"Min/max : {rep.min_max_ratio:.2f} · coins/centre : {rep.corner_center_ratio:.2f}"
@@ -457,22 +553,68 @@ class IlluminationWidget(QWidget):
             units=("µm", "µm") if self.m.pixel_size_um() else None,
         )
 
-    def _acquire_dark(self) -> None:
-        self._dark = average_frames(self.m, 8)
-        self.message.emit("Image de noir acquise (elle sera enregistrée avec le champ plat)")
+    def _acquire(self, kind: str) -> None:
+        """Moyenne de 8 images, dans un thread de travail (plusieurs secondes en pose longue)."""
+        if self._pending is not None:
+            return
+        self._pending = (kind, self._keys())
+        for b in (self.flat_btn, self.dark_btn):
+            b.setEnabled(False)
+        self.message.emit("Acquisition de la référence (8 images)…")
+        worker = create_worker(average_frames, self.m, 8, _start_thread=False)
+        worker.returned.connect(self._acquired)
+        worker.errored.connect(self._acquire_failed)
+        worker.finished.connect(self._acquire_finished)
+        worker.start()
 
-    def _acquire_flat(self) -> None:
-        flat = average_frames(self.m, 8)
-        path = self.store.save(*self._keys(), flat, self._dark)
+    def _acquire_failed(self, exc: Exception) -> None:
+        QMessageBox.warning(self, "Champ plat", str(exc))
+
+    def _acquire_finished(self) -> None:
+        self._pending = None
+        for b in (self.flat_btn, self.dark_btn):
+            b.setEnabled(True)
+
+    def _acquired(self, image: np.ndarray) -> None:
+        if self._pending is None:
+            return
+        kind, keys = self._pending
+        if kind == "dark":
+            self._dark = image
+            ref = self.store.load(*keys)
+            if ref is not None and ref[0].shape == image.shape:
+                self.store.save(*keys, ref[0], image)
+                self.message.emit("Image de noir enregistrée avec le champ plat existant")
+            else:
+                self.message.emit("Image de noir acquise (elle sera enregistrée avec le champ plat)")
+            return
+        cam = self.m.camera
+        if cam is not None:
+            saturated = float(np.mean(image >= 0.98 * (2**cam.bit_depth - 1)))
+            if saturated > 0.01:
+                QMessageBox.warning(
+                    self,
+                    "Champ plat",
+                    f"{saturated * 100:.0f} % de l'image est saturée : la référence serait fausse.\n\n"
+                    "Réduisez l'exposition ou la lampe, puis recommencez.",
+                )
+                return
+        dark = self._dark if self._dark is not None and self._dark.shape == image.shape else None
+        path = self.store.save(*keys, image, dark)
         self.message.emit(f"Champ plat enregistré : {path}")
         self._refresh_status()
 
-    def correct(self, data: np.ndarray) -> np.ndarray:
-        """Applique la correction si demandée et disponible."""
+    def correct(self, data: np.ndarray) -> tuple[np.ndarray, bool | None]:
+        """Applique la correction de champ plat si elle est demandée.
+
+        Renvoie l'image et : ``None`` si la correction n'est pas demandée, ``True`` si
+        elle est appliquée, ``False`` si elle est demandée mais impossible (pas de
+        référence pour cet objectif et ce canal, ou taille d'image différente).
+        """
         if not self.apply.isChecked():
-            return data
+            return data, None
         out = self.store.correct(data, *self._keys())
-        return data if out is None else out
+        return (data, False) if out is None else (out, True)
 
 
 class AssistantsPanel(QTabWidget):
@@ -497,3 +639,8 @@ class AssistantsPanel(QTabWidget):
         self.setUsesScrollButtons(False)
         self.setElideMode(Qt.TextElideMode.ElideNone)
         self.tabBar().setExpanding(False)
+
+    def shutdown(self) -> None:
+        """Arrête les minuteurs avant la déconnexion du microscope."""
+        for assistant in (self.kohler, self.focus):
+            assistant.stop()

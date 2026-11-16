@@ -313,7 +313,11 @@ class MicroscopeProfile(_Model):
         return yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
 
     def save(self, path: str | Path) -> None:
-        Path(path).write_text(self.to_yaml(), encoding="utf-8")
+        """Écriture atomique : un plantage ne peut pas laisser un profil à moitié écrit."""
+        path = Path(path)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(self.to_yaml(), encoding="utf-8")
+        os.replace(tmp, path)
 
 
 def user_profile_dir() -> Path:

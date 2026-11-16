@@ -27,6 +27,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 import zipfile
 from pathlib import Path
 from types import ModuleType
@@ -69,7 +70,11 @@ def load_toupcam(sdk_path: str | Path | None = None) -> ModuleType:
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules["toupcam"] = module
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop("toupcam", None)  # ne pas garder un module à moitié chargé
+        raise
     return module
 
 
@@ -91,6 +96,18 @@ def _platform_library() -> tuple[str, tuple[str, ...]]:
     return "libtoupcam.so", arch
 
 
+def _library_rank(path: Path, arch: tuple[str, ...]) -> tuple[bool, bool, bool, str]:
+    """Classe les bibliothèques du SDK : la bonne plateforme et la bonne architecture d'abord.
+
+    Le SDK contient aussi des bibliothèques Android portant le même nom que celles de
+    Linux : elles ne doivent jamais être choisies.
+    """
+    parts = [x.lower() for x in path.parts]
+    wanted = {"darwin": ("mac", "macos", "osx"), "win32": ("win", "windows")}.get(sys.platform, ("linux",))
+    foreign = any(x in parts for x in ("android", "ios", "harmony", "uwp"))
+    return (foreign, not any(x in parts for x in wanted), not any(a in parts for a in arch), str(path))
+
+
 def install_sdk(source: str | Path, dest: str | Path | None = None) -> Path:
     """Copie ``toupcam.py`` + la bibliothèque native depuis le SDK (dossier ou .zip)."""
     source = Path(source).expanduser()
@@ -110,7 +127,7 @@ def install_sdk(source: str | Path, dest: str | Path | None = None) -> Path:
         libs = list(root.rglob(libname))
         if not libs:
             raise FileNotFoundError(f"{libname} introuvable dans {source} (plateforme {sys.platform})")
-        libs.sort(key=lambda p: (not any(a in [x.lower() for x in p.parts] for a in arch), str(p)))
+        libs.sort(key=lambda p: _library_rank(p.relative_to(root), arch))
         dest.mkdir(parents=True, exist_ok=True)
         shutil.copy2(modules[0], dest / "toupcam.py")
         shutil.copy2(libs[0], dest / libname)
@@ -151,7 +168,10 @@ class ToupTekCamera(Camera):
         self._buf_lock = threading.Lock()
         self._live_flag = False
         self._has_trigger = False
+        self._trigger_failed = False
         self._last_error: str | None = None
+        #: Erreur définitive (caméra débranchée) : toute capture échoue aussitôt.
+        self._fatal: str | None = None
         self.supports_auto_white_balance = True
 
     # -- utilitaires SDK ---------------------------------------------------------
@@ -188,26 +208,46 @@ class ToupTekCamera(Camera):
                 raise RuntimeError(f"Caméra {self._camera_id!r} introuvable ; détectées : {names}")
             info = matches[0]
         self._info = info
+        self._fatal = None
         self._hcam = tc.Toupcam.Open(info.id)
         if not self._hcam:
-            raise RuntimeError(f"Impossible d'ouvrir {info.displayname}")
-        flag = info.model.flag
-        self._mono = bool(flag & self._c("TOUPCAM_FLAG_MONO", 0x10))
-        trig = self._c("TOUPCAM_FLAG_TRIGGER_SOFTWARE", 0x00080000)
-        self._has_trigger = bool(flag & trig)
-        if self._mono:
-            self.supports_auto_white_balance = False
-        self._configure()
-        self._hcam.StartPullModeWithCallback(ToupTekCamera._event_callback, self)
-        self._register_props()
+            raise RuntimeError(
+                f"Impossible d'ouvrir {info.displayname} : la caméra est peut-être utilisée "
+                "par un autre logiciel (ToupView...)."
+            )
+        try:
+            flag = info.model.flag
+            self._mono = bool(flag & self._c("TOUPCAM_FLAG_MONO", 0x10))
+            trig = self._c("TOUPCAM_FLAG_TRIGGER_SOFTWARE", 0x00080000)
+            self._has_trigger = bool(flag & trig)
+            if self._mono:
+                self.supports_auto_white_balance = False
+            self._configure()
+            self._start_stream()
+            self._register_props()
+        except Exception:
+            self._close_handle()  # sinon la caméra resterait « occupée » jusqu'au redémarrage
+            raise
         super().initialize()
+
+    def _start_stream(self) -> None:
+        self._hcam.StartPullModeWithCallback(ToupTekCamera._event_callback, self)
+
+    def _close_handle(self) -> None:
+        handle, self._hcam = self._hcam, None
+        if handle is not None:
+            try:
+                handle.Close()
+            except Exception:  # pragma: no cover - dépend du matériel
+                log.exception("Erreur à la fermeture de la caméra ToupTek")
 
     def _configure(self) -> None:
         """Résolution, profondeur de bits, format de pixel (caméra arrêtée)."""
         h, tc = self._hcam, self._tc
         model = self._info.model
-        if 0 <= self._res_index < max(1, int(getattr(model, "preview", 1))):
-            h.put_eSize(self._res_index)
+        n_res = max(1, int(getattr(model, "preview", 1)))
+        self._res_index = min(max(self._res_index, 0), n_res - 1)
+        h.put_eSize(self._res_index)
         raw_flags = 0
         for flag_name in (
             "TOUPCAM_FLAG_RAW10",
@@ -242,24 +282,22 @@ class ToupTekCamera(Camera):
         self._buf = bytes(stride * hh)
 
     def _reconfigure(self, **changes: Any) -> None:
-        was_live = self.is_live
+        """Change résolution ou profondeur : la caméra doit être arrêtée entre-temps."""
+        was_live = self._live_flag
+        self._live_flag = False  # _configure() remet la caméra en mode déclenché
         self._hcam.Stop()
         if "resolution_index" in changes:
             self._res_index = int(changes["resolution_index"])
         if "bit_depth" in changes:
             self._want_bits = int(changes["bit_depth"])
         self._configure()
-        self._hcam.StartPullModeWithCallback(ToupTekCamera._event_callback, self)
+        self._start_stream()
         if was_live:
             self.start_live()
 
     def shutdown(self) -> None:
         self._live_flag = False
-        if self._hcam is not None:
-            try:
-                self._hcam.Close()
-            finally:
-                self._hcam = None
+        self._close_handle()
         super().shutdown()
 
     # -- réception des images -----------------------------------------------------
@@ -269,36 +307,51 @@ class ToupTekCamera(Camera):
 
     def _on_event(self, event: int) -> None:
         tc = self._tc
+        hcam = self._hcam
+        if hcam is None:  # événement tardif pendant la fermeture
+            return
         if event == self._c("TOUPCAM_EVENT_IMAGE", 0x0004):
             try:
                 with self._buf_lock:
-                    if hasattr(self._hcam, "PullImageV2"):
-                        self._hcam.PullImageV2(self._buf, self._pull_bits, None)
-                    else:  # SDK récents
-                        self._hcam.PullImageV3(self._buf, 0, self._pull_bits, 0, None)
+                    if hasattr(hcam, "PullImageV3"):
+                        hcam.PullImageV3(self._buf, 0, self._pull_bits, 0, None)
+                    else:  # anciens SDK
+                        hcam.PullImageV2(self._buf, self._pull_bits, None)
                     img = self._buffer_to_array()
             except Exception as exc:  # pragma: no cover - dépend du matériel
                 self._last_error = f"lecture d'image : {exc}"
                 log.warning("ToupTek : %s", self._last_error)
                 return
+            if self._high and self._bits < 16 and int(img[::16, ::16].max()) >> self._bits:
+                # certains modèles étalent leurs valeurs sur 16 bits au lieu de 0..2^n − 1
+                self._bits = 16
             self._publish(img)
+        elif event == getattr(tc, "TOUPCAM_EVENT_TRIGGERFAIL", 0x0007):
+            self._trigger_failed = True
         elif event in (
             getattr(tc, "TOUPCAM_EVENT_ERROR", 0x0080),
             getattr(tc, "TOUPCAM_EVENT_DISCONNECTED", 0x0081),
         ):
-            self._last_error = "caméra déconnectée ou en erreur"
-            log.error("ToupTek : %s (événement 0x%x)", self._last_error, event)
+            self._fatal = "caméra débranchée ou en erreur : vérifiez le câble puis reconnectez"
+            self._last_error = self._fatal
+            log.error("ToupTek : %s (événement 0x%x)", self._fatal, event)
+            with self._frame_cond:
+                self._frame_cond.notify_all()
+
+    def _check_alive(self) -> None:
+        if self._fatal:
+            raise RuntimeError(f"{self.label} : {self._fatal}")
 
     def _buffer_to_array(self) -> np.ndarray:
         h, w = self._size
         bpp = self._pull_bits // 8
         stride = ((w * self._pull_bits + 31) // 32) * 4
         raw = np.frombuffer(self._buf, dtype=np.uint8, count=stride * h).reshape(h, stride)
-        raw = raw[:, : w * bpp]
+        # copie obligatoire : le tampon est réécrit par l'image suivante (sans le bourrage
+        # de fin de ligne quand la largeur n'est pas un multiple de 4 octets)
+        arr = raw[:, : w * bpp].copy()
         if self._pull_bits in (16, 48):
-            arr = np.ascontiguousarray(raw).view("<u2")
-        else:
-            arr = raw.copy()
+            arr = arr.view("<u2")
         return arr.reshape(h, w) if self._mono else arr.reshape(h, w, 3)
 
     # -- interface Camera ---------------------------------------------------------
@@ -316,13 +369,18 @@ class ToupTekCamera(Camera):
     @property
     def sensor_pixel_size_um(self) -> float | None:
         px = getattr(self._info.model, "xpixsz", 0) if self._info else 0
-        if not px:
-            return None
-        # en résolution réduite (binning du capteur), le pixel effectif est plus grand
-        res = getattr(self._info.model, "res", None)
-        if res and self._res_index > 0 and res[0].width:
-            px = px * res[0].width / res[self._res_index].width
-        return float(px)
+        return float(px) if px else None
+
+    @property
+    def binning(self) -> float:
+        """En résolution réduite, chaque pixel image couvre plusieurs photosites : la
+        taille du pixel (estimée ou calibrée en pleine résolution) est multipliée d'autant."""
+        res = getattr(self._info.model, "res", None) if self._info else None
+        i = self._res_index
+        if not res or not 0 < i < len(res) or not res[i].width:
+            return 1
+        ratio = res[0].width / res[i].width
+        return int(round(ratio)) if abs(ratio - round(ratio)) < 0.01 else ratio
 
     def get_exposure(self) -> float:
         return self._hcam.get_ExpoTime() / 1000.0
@@ -372,21 +430,67 @@ class ToupTekCamera(Camera):
         self._live_flag = False
         if self._has_trigger:
             self._hcam.put_Option(self._c("TOUPCAM_OPTION_TRIGGER"), 1)
+            flush = getattr(self._tc, "TOUPCAM_OPTION_FLUSH", None)
+            if flush is not None:  # jeter les images vidéo encore en transit
+                try:
+                    self._hcam.put_Option(flush, 3)
+                except Exception:  # pragma: no cover - option absente sur certains modèles
+                    log.debug("TOUPCAM_OPTION_FLUSH non supportée")
 
     def snap(self) -> np.ndarray:
-        timeout = self.get_exposure() / 1000.0 * 3 + 5.0
+        """Renvoie une image exposée **après** la demande.
+
+        En mode déclenché, une image est demandée à la caméra ; en live, on attend dans
+        le flux. Dans les deux cas, une image arrivée moins d'un temps de pose après la
+        demande a forcément commencé avant (image vidéo en transit, ancien réglage) :
+        elle est écartée. Sans ce contrôle, toute une acquisition pourrait être décalée
+        d'une image.
+        """
         with self._lock:
+            self._check_alive()
+            exposure_s = self.get_exposure() / 1000.0
+            timeout = exposure_s * 3 + 5.0
+            triggered = self._has_trigger and not self._live_flag
+            try:
+                auto = bool(self._hcam.get_AutoExpoEnable())
+            except Exception:  # pragma: no cover
+                auto = False
             count, _ = self.latest_frame()
-            if self._live_flag or not self._has_trigger:
-                # flux continu : la 1re image peut avoir commencé avant la demande
-                self.wait_for_frame(count, timeout)
-                count, _ = self.latest_frame()
-                return self.wait_for_frame(count, timeout)
-            self._hcam.Trigger(1)
-            return self.wait_for_frame(count, timeout)
+            t0 = time.monotonic()
+            if triggered:
+                self._trigger_failed = False
+                self._hcam.Trigger(1)
+            # avec l'exposition automatique, le temps de pose réel est inconnu : pas de contrôle
+            earliest = t0 if auto else t0 + 0.9 * exposure_s
+            deadline = t0 + timeout
+            candidate: np.ndarray | None = None
+            grace = deadline
+            retried = False
+            while True:
+                now = time.monotonic()
+                if candidate is not None and now >= grace:
+                    return candidate  # rien d'autre n'est venu : c'était bien la bonne image
+                if now >= deadline:
+                    raise TimeoutError(f"{self.name} : aucune image reçue en {timeout:.1f} s")
+                if triggered and self._trigger_failed and not retried:
+                    retried, self._trigger_failed = True, False
+                    self._hcam.Trigger(1)
+                try:
+                    count, img, arrived = self._wait_frame(count, min(deadline - now, 0.2))
+                except TimeoutError:
+                    continue
+                if arrived >= earliest:
+                    return img
+                candidate, grace = img, time.monotonic() + exposure_s * 1.5 + 0.5
 
     def _snap(self) -> np.ndarray:  # pragma: no cover - snap() est surchargée
         return self.snap()
+
+    def _max_bits(self) -> int:
+        try:
+            return int(self._hcam.MaxBitDepth())
+        except Exception:
+            return 12 if self._high else 8
 
     # -- propriétés génériques -------------------------------------------------------
     def _register_props(self) -> None:
@@ -482,7 +586,11 @@ class ToupTekCamera(Camera):
         if bl is not None:
             optional(
                 PropertyInfo(
-                    "Niveau de noir", PropertyType.INT, limits=(0, 255 * 16), category=img, advanced=adv
+                    "Niveau de noir",
+                    PropertyType.INT,
+                    limits=(0, 31 << max(0, self._max_bits() - 8)),
+                    category=img,
+                    advanced=adv,
                 ),
                 lambda: h.get_Option(bl),
                 lambda v: h.put_Option(bl, int(v)),
@@ -558,16 +666,23 @@ class ToupTekCamera(Camera):
                 software_trigger=self._has_trigger,
                 max_speed=model.maxspeed,
             )
-            for key, fn in (
-                ("serial", "get_SerialNumber"),
-                ("firmware", "get_FwVersion"),
-                ("hardware", "get_HwVersion"),
-                ("sdk", None),
+            out["resolution_scale"] = self.binning
+            # les noms de ces méthodes ont changé d'une version du SDK à l'autre
+            for key, names in (
+                ("serial", ("SerialNumber", "get_SerialNumber")),
+                ("firmware", ("FwVersion", "get_FwVersion")),
+                ("hardware", ("HwVersion", "get_HwVersion")),
             ):
-                try:
-                    out[key] = getattr(self._hcam, fn)() if fn else self._tc.Toupcam.Version()
-                except Exception:
-                    pass
+                for fn in names:
+                    try:
+                        out[key] = getattr(self._hcam, fn)()
+                        break
+                    except Exception:
+                        continue
+            try:
+                out["sdk"] = self._tc.Toupcam.Version()
+            except Exception:
+                pass
         if self._last_error:
             out["last_error"] = self._last_error
         return out

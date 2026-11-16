@@ -20,7 +20,7 @@ class FrameMetadata:
     exposure_ms: float | None = None
     gain: float | None = None
     bit_depth: int | None = None
-    binning: int = 1
+    binning: float = 1
     pixel_size_um: float | None = None
     objective: str | None = None
     objective_na: float | None = None

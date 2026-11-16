@@ -129,3 +129,106 @@ def test_flat_field_store_roundtrip(tmp_path):
     corrected = store.correct(raw, "10x/0.25", "Fond clair")
     assert corrected is not None and corrected.std() < 1
     assert store.correct(raw, "40x", "Fond clair") is None
+
+
+# ------------------------------------------------------------------ non-régressions
+def _micrometer_scope(width, height):
+    from fuji.core import Microscope, MicroscopeProfile
+
+    return Microscope(
+        MicroscopeProfile.from_yaml(
+            f"""
+name: Mire
+devices:
+  - {{name: obj, driver: demo.state}}
+  - {{name: cam, driver: demo.camera, options: {{width: {width}, height: {height}, color: true,
+      bit_depth: 12, simulate_timing: false, specimen: micromètre}}}}
+roles: {{camera: cam, objective_changer: obj}}
+objectives:
+  - {{label: "4x/0.10", magnification: 4, na: 0.1}}
+  - {{label: "40x/0.65", magnification: 40, na: 0.65}}
+  - {{label: "100x/1.25", magnification: 100, na: 1.25, immersion: huile}}
+"""
+        )
+    )
+
+
+@pytest.mark.parametrize("rotation", [0.0, 0.2, -3.0, 14.0])
+@pytest.mark.parametrize("objective", ["4x/0.10", "40x/0.65"])
+def test_micrometer_calibration_any_orientation_and_magnification(rotation, objective):
+    """Traits fins ne couvrant qu'une bande de l'image (4x), caméra tournée ou parfaitement
+    alignée (0° : cas où un profil trop fin créait de faux traits)."""
+    with _micrometer_scope(1024, 768) as scope:
+        scope.camera.set_property("Rotation caméra", rotation)
+        scope.set_objective(objective)
+        cal = calibrate_micrometer(scope.snap().data, 10.0)
+        assert cal.reliable
+        assert cal.pixel_size_um == pytest.approx(scope.pixel_size_um(), rel=2e-3)
+        # l'image tourne dans le sens opposé à la caméra : on compare les valeurs absolues
+        assert abs(cal.angle_deg) == pytest.approx(abs(rotation), abs=0.3)
+
+
+def test_micrometer_calibration_on_4k_low_magnification():
+    with _micrometer_scope(3840, 2160) as scope:
+        scope.set_objective("4x/0.10")
+        cal = calibrate_micrometer(scope.snap().data, 10.0)
+        assert cal.reliable and cal.n_lines > 50
+        assert cal.pixel_size_um == pytest.approx(scope.pixel_size_um(), rel=1e-3)
+
+
+def test_micrometer_calibration_with_too_few_lines_is_not_reliable():
+    """Peu de traits visibles : le résultat est signalé comme peu fiable, jamais présenté
+    comme sûr."""
+    with _micrometer_scope(1024, 768) as scope:
+        scope.camera.set_property("Rotation caméra", 14.0)
+        scope.set_objective("100x/1.25")
+        try:
+            cal = calibrate_micrometer(scope.snap().data, 10.0)
+        except ValueError:
+            return  # refus net : acceptable aussi
+        assert cal.n_lines < 5 and not cal.reliable
+
+
+def test_calibration_rejects_images_without_graduations(demo_scope):
+    demo_scope.camera.set_property("Échantillon", "vide")
+    with pytest.raises(ValueError):
+        calibrate_micrometer(demo_scope.snap().data, 10.0)
+    with pytest.raises(ValueError):
+        calibrate_micrometer(np.full((200, 300), 1000, np.uint16), 10.0)
+
+
+def test_focus_peaking_reports_its_subsampling_step():
+    from fuji.assistants import focus_peaking
+
+    small = np.random.default_rng(0).normal(1000, 50, (300, 400))
+    mask, step = focus_peaking(small)
+    assert step == 1 and mask.shape == small.shape and mask.dtype == bool
+    big = np.zeros((2160, 3840, 3), np.uint16)
+    mask, step = focus_peaking(big)
+    assert step == 4 and mask.shape == (540, 960)
+
+
+@pytest.mark.parametrize("start_ms", [0.05, 5.0, 2000.0])
+def test_auto_exposure_converges_from_dark_and_saturated(demo_scope, start_ms):
+    cam = demo_scope.camera
+    cam.set_exposure(start_ms)
+    cam.auto_expose(0.7)
+    peak = float(np.percentile(cam.snap()[::4, ::4], 99.5)) / (2**cam.bit_depth - 1)
+    assert 0.6 < peak < 0.8
+
+
+def test_autofocus_restores_focus_when_the_scan_fails(demo_scope, monkeypatch):
+    demo_scope.focus.move_to(7.0)
+    calls = {"n": 0}
+    real_snap = demo_scope.snap
+
+    def flaky():  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise RuntimeError("caméra débranchée")
+        return real_snap()
+
+    monkeypatch.setattr(demo_scope, "snap", flaky)
+    with pytest.raises(RuntimeError):
+        autofocus(demo_scope, range_um=24, step_um=3)
+    assert demo_scope.focus.get_position() == pytest.approx(7.0)

@@ -963,6 +963,9 @@ class ChannelsPage(Page):
         self._collect = None
 
     def load(self, data: dict[str, Any]) -> None:
+        # le formulaire affiché a été enregistré en quittant la page ; le relire maintenant
+        # écraserait ce que les autres pages ont changé entre-temps (périphérique renommé...)
+        self._collect = None
         self._data = data
         self._refresh(max(0, self.list.currentRow()))
 

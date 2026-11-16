@@ -24,7 +24,7 @@ import numpy as np
 from scipy import ndimage as ndi
 from skimage import filters, measure
 
-from .focus import to_gray
+from .focus import subsample_step, to_gray
 
 
 class KohlerStep(str, Enum):
@@ -71,11 +71,15 @@ def _fit_circle(points: np.ndarray) -> tuple[float, float, float]:
     return yc, xc, r
 
 
-def analyze_field_diaphragm(image: np.ndarray, *, max_side: int = 512) -> FieldDiaphragmReport:
-    """Détecte l'image du diaphragme de champ et mesure netteté, centrage, ouverture."""
+def analyze_field_diaphragm(image: np.ndarray, *, max_side: int = 768) -> FieldDiaphragmReport:
+    """Détecte l'image du diaphragme de champ et mesure netteté, centrage, ouverture.
+
+    L'analyse se fait sur une image réduite ; les résultats sont rendus en pixels de
+    l'image d'origine.
+    """
     full_h, full_w = image.shape[:2]
     g = to_gray(image, max_side)
-    scale = full_h / g.shape[0]
+    scale = float(subsample_step(image.shape, max_side))
     h, w = g.shape
     smooth = ndi.gaussian_filter(g, 1.0)
     try:
@@ -290,6 +294,9 @@ class KohlerAssistant:
 
     def update(self, image: np.ndarray) -> KohlerGuidance:
         rep = analyze_field_diaphragm(image)
+        # un bord « net » fait quelques pixels de l'image réduite : seuil proportionnel à
+        # la taille de l'image, sinon il serait inatteignable avec une caméra 4K
+        sharp_enough = max(12.0, 0.015 * min(image.shape[:2]))
         step = self.step
         title = STEP_TITLES[step]
         g = KohlerGuidance(step, title, "", rep)
@@ -328,7 +335,7 @@ class KohlerAssistant:
                     f"plus nets possible. Bord : {w:.1f} px (meilleur : {self.best_edge:.1f} px). "
                     "Dépassez le point net puis revenez-y."
                 )
-                g.can_advance = near_best and w < 12
+                g.can_advance = near_best and w < sharp_enough
         elif step is KohlerStep.CENTER_CONDENSER:
             if not rep.visible or rep.offset_px is None or rep.offset_fraction is None:
                 self._stable(False)

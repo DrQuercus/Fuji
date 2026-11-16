@@ -65,11 +65,15 @@ def _world(kind: str, seed: int = 7) -> tuple[np.ndarray, np.ndarray]:
         cyto = ndi.gaussian_filter(cyto, 1.2, mode="wrap") * (1 + 0.25 * texture)
         nuc = ndi.gaussian_filter(nuc, 1.0, mode="wrap") * (1 + 0.15 * texture)
     elif kind == "micromètre":
-        # traits tous les 10 µm (20 px monde), larges de 1.5 µm, sur une bande de 300 µm
-        period = int(round(10 / WORLD_RES_UM))
-        for i, x in enumerate(range(0, n, period)):
+        # traits tous les 10 µm (20 px monde), larges de 1.5 µm, plus longs tous les 5 et 10.
+        # Largeur du motif = 100 traits exactement, pour qu'il se répète sans décalage.
+        period = round(10 / WORLD_RES_UM)
+        width = 100 * period
+        cyto = np.zeros((n, width), np.float32)
+        nuc = np.zeros((n, width), np.float32)
+        for i in range(100):
             length = 300 if i % 10 == 0 else (200 if i % 5 == 0 else 120)
-            nuc[n // 2 - length : n // 2 + length, x : x + 3] = 1.6
+            nuc[n // 2 - length : n // 2 + length, i * period : i * period + 3] = 1.6
         nuc[n // 2 - 2 : n // 2 + 2, :] = 1.6
         nuc = ndi.gaussian_filter(nuc, 0.7, mode="wrap")
     np.clip(cyto, 0, None, out=cyto)
@@ -477,8 +481,10 @@ class DemoFocus(FocusDrive):
 class DemoStateDevice(StateDevice):
     def __init__(self, name: str, labels: list[str], *, initial: int = 0, **kw: Any) -> None:
         super().__init__(name, **kw)
-        self._labels = list(labels)
-        self._state = int(initial)
+        self._labels = [str(lbl) for lbl in labels]
+        if not self._labels:
+            raise ValueError(f"{name} : au moins une position est nécessaire")
+        self._state = self._check_index(initial)
 
     @property
     def labels(self) -> list[str]:

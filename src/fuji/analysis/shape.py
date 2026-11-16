@@ -5,14 +5,19 @@ ses définitions (périmètre, Feret, ellipse) diffèrent légèrement de celles
 et qu'un résultat doit être identique d'un logiciel à l'autre pour être comparable
 avec la littérature. Ici :
 
-- **contour** : tracé le long des bords des pixels (comme la baguette d'ImageJ),
-  objets en 8-connexité ;
+- **contour** : tracé le long des bords des pixels, objets en 8-connexité, dans le
+  même sens et à partir du même sommet que la baguette d'ImageJ (``Wand.traceEdge``).
+  Le sommet de départ compte : le périmètre en dépend dans les « escaliers » ;
 - **périmètre** : ``PolygonRoi.getTracedPerimeter`` (bords droits = 1, coins
   non adjacents corrigés de 2 − √2) ;
-- **ellipse** : mêmes moments qu'``EllipseFitter`` (pixel = carré, +1/12), puis mise
-  à l'échelle pour avoir la même surface que l'objet ;
-- **Feret** : sur les sommets du contour tracé (coins des pixels) ;
+- **ellipse** : transcription d'``EllipseFitter`` (pixel = carré, +1/12, même surface
+  que l'objet, mêmes conventions d'angle) ;
+- **Feret** : sur l'enveloppe convexe du contour, parcourue dans l'ordre d'ImageJ pour
+  que l'angle soit le même quand plusieurs diamètres sont égaux (formes symétriques) ;
 - **centroïde** : centre des pixels (+0.5).
+
+Ces fonctions transcrivent le code source d'ImageJ ; le test
+``tests/test_imagej_parity.py`` les compare au vrai ImageJ quand il est disponible.
 """
 
 from __future__ import annotations
@@ -29,8 +34,9 @@ _DIRS = ((1, 0), (0, 1), (-1, 0), (0, -1))
 def trace_outline(mask: np.ndarray) -> np.ndarray:
     """Sommets du contour extérieur (coordonnées des coins de pixels, x puis y).
 
-    ``mask`` : objet unique (booléen). Le contour suit les bords des pixels, objet à
-    droite, en considérant les pixels qui se touchent par un coin comme connectés.
+    ``mask`` : objet unique (booléen). Le contour suit les bords des pixels dans le sens
+    des aiguilles d'une montre (objet à droite), en considérant les pixels qui se touchent
+    par un coin comme connectés. Seuls les changements de direction sont des sommets.
     """
     m = np.pad(np.asarray(mask, dtype=bool), 1)
     rows, cols = np.nonzero(m)
@@ -67,7 +73,9 @@ def trace_outline(mask: np.ndarray) -> np.ndarray:
     else:  # pragma: no cover - garde-fou
         raise RuntimeError("Contour non refermé")
     out = np.asarray(verts, dtype=np.int64) - 1  # retirer le bord ajouté
-    return out
+    # ImageJ part du bord droit du premier segment de la ligne du haut et descend : son
+    # premier sommet est donc le troisième du nôtre (après les deux coins du haut).
+    return np.roll(out, -2, axis=0)
 
 
 def traced_perimeter(verts: np.ndarray, px: float = 1.0) -> float:
@@ -96,10 +104,12 @@ def traced_perimeter(verts: np.ndarray, px: float = 1.0) -> float:
 
 
 def _hull(points: np.ndarray) -> np.ndarray:
-    """Enveloppe convexe (chaîne monotone d'Andrew), sommets dans l'ordre."""
+    """Enveloppe convexe stricte (sans points alignés), dans l'ordre d'ImageJ : départ au
+    sommet le plus haut (puis le plus à gauche), sens inverse des aiguilles d'une montre à
+    l'écran (``FloatPolygon.getConvexHull``, algorithme du papier cadeau)."""
     pts = np.unique(points.astype(np.float64), axis=0)
     if len(pts) <= 2:
-        return pts
+        return pts[np.lexsort((pts[:, 0], pts[:, 1]))]
     pts = pts[np.lexsort((pts[:, 1], pts[:, 0]))]
 
     def cross(o: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
@@ -115,7 +125,11 @@ def _hull(points: np.ndarray) -> np.ndarray:
         while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
             upper.pop()
         upper.append(p)
-    return np.asarray(lower[:-1] + upper[:-1])
+    hull = np.asarray(lower[:-1] + upper[:-1])[::-1]  # chaîne monotone : sens horaire → inversé
+    if len(hull) < 3:  # points alignés
+        return hull[np.lexsort((hull[:, 0], hull[:, 1]))]
+    start = int(np.lexsort((hull[:, 0], hull[:, 1]))[0])
+    return np.roll(hull, -start, axis=0)
 
 
 def polygon_area(verts: np.ndarray) -> float:
@@ -135,20 +149,27 @@ class Feret:
 
 
 def feret(verts: np.ndarray) -> Feret:
+    """Diamètres de Feret (``Roi.getFeretValues``)."""
     hull = _hull(verts)
+    if len(hull) == 0:
+        return Feret(0.0, 0.0, 0.0, 0.0, 0.0)
     if len(hull) == 1:
         return Feret(0.0, 0.0, 0.0, float(hull[0, 0]), float(hull[0, 1]))
     diff = hull[:, None, :] - hull[None, :, :]
     d2 = (diff**2).sum(-1)
+    # première paire (i ≤ j, dans l'ordre de l'enveloppe) atteignant le maximum, comme ImageJ
     i, j = np.unravel_index(int(np.argmax(d2)), d2.shape)
     dmax = math.sqrt(float(d2[i, j]))
-    p1, p2 = hull[i], hull[j]
-    if p1[0] > p2[0] or (p1[0] == p2[0] and p1[1] < p2[1]):
-        p1, p2 = p2, p1
-    angle = math.degrees(math.atan2(-(p2[1] - p1[1]), p2[0] - p1[0])) % 180.0
+    (x1, y1), (x2, y2) = hull[i], hull[j]
+    if x1 > x2:
+        x1, y1, x2, y2 = x2, y2, x1, y1
+    angle = math.degrees(math.atan2(y1 - y2, x2 - x1))  # y vers le haut
+    if angle < 0:
+        angle += 180.0
     # largeur minimale : pieds à coulisse tournants sur les arêtes de l'enveloppe
-    dmin = dmax
+    dmin = 0.0
     if len(hull) >= 3:
+        dmin = dmax
         for k in range(len(hull)):
             a, b = hull[k], hull[(k + 1) % len(hull)]
             edge = b - a
@@ -158,9 +179,7 @@ def feret(verts: np.ndarray) -> Feret:
             rel = hull - a
             dist = np.abs(edge[0] * rel[:, 1] - edge[1] * rel[:, 0]) / length
             dmin = min(dmin, float(dist.max()))
-    else:
-        dmin = 0.0
-    return Feret(dmax, dmin, angle, float(p1[0]), float(p1[1]))
+    return Feret(dmax, dmin, angle, float(x1), float(y1))
 
 
 @dataclass
@@ -171,24 +190,52 @@ class Ellipse:
 
 
 def fit_ellipse(rows: np.ndarray, cols: np.ndarray) -> Ellipse:
-    """Ellipse de mêmes moments et de même surface (``EllipseFitter`` d'ImageJ)."""
-    n = rows.size
+    """Ellipse de mêmes moments d'ordre 2 et de même surface que l'objet.
+
+    Transcription d'``ij.process.EllipseFitter`` (``computeSums``, ``getMoments``,
+    ``getEllipseParam``), constantes comprises, pour obtenir les mêmes chiffres.
+    """
+    n = int(rows.size)
     if n == 0:
         return Ellipse(0.0, 0.0, 0.0)
     x = cols.astype(np.float64)
     y = rows.astype(np.float64)
-    xm, ym = x.mean(), y.mean()
-    cxx = ((x - xm) ** 2).mean() + 1 / 12
-    cyy = ((y - ym) ** 2).mean() + 1 / 12
-    cxy = ((x - xm) * (y - ym)).mean()
-    tr, det = cxx + cyy, cxx * cyy - cxy**2
-    disc = math.sqrt(max(tr * tr / 4 - det, 0.0))
-    l1, l2 = tr / 2 + disc, max(tr / 2 - disc, 1e-12)
-    ratio = math.sqrt(l1 / l2)
-    b = math.sqrt(n / (math.pi * ratio))
-    a = ratio * b
-    theta_down = 0.5 * math.atan2(2 * cxy, cxx - cyy)
-    angle = (-math.degrees(theta_down)) % 180.0
-    if abs(cxx - cyy) < 1e-12 and abs(cxy) < 1e-12:
+    x1, y1 = float(x.sum()) / n, float(y.sum()) / n
+    x2 = (float((x * x).sum()) + 0.08333333 * n) / n
+    y2 = (float((y * y).sum()) + 0.08333333 * n) / n
+    xy = float((x * y).sum()) / n
+    u20 = x2 - x1 * x1  # variance en x
+    u02 = y2 - y1 * y1  # variance en y
+    u11 = xy - x1 * y1
+    m4 = 4.0 * abs(u02 * u20 - u11 * u11)
+    if m4 < 0.000001:
+        m4 = 0.000001
+    a11, a12, a22 = u02 / m4, u11 / m4, u20 / m4
+    tmp = a11 - a22
+    if tmp == 0.0:
+        tmp = 0.000001
+    theta = 0.5 * math.atan(2.0 * a12 / tmp)
+    if theta < 0.0:
+        theta += math.pi / 2
+    if a12 > 0.0:
+        theta += math.pi / 2
+    elif a12 == 0.0:
+        if a22 > a11:
+            theta = 0.0
+            a22, a11 = a11, a22
+        elif a11 != a22:
+            theta = math.pi / 2
+    tmp = math.sin(theta)
+    if tmp == 0.0:
+        tmp = 0.000001
+    z = a12 * math.cos(theta) / tmp
+    major = math.sqrt(1.0 / abs(a22 + z))
+    minor = math.sqrt(1.0 / abs(a11 - z))
+    scale = math.sqrt(n / (math.pi * major * minor))  # même surface que l'objet
+    major, minor = major * scale * 2.0, minor * scale * 2.0
+    angle = 180.0 * theta / math.pi
+    if angle == 180.0:
         angle = 0.0
-    return Ellipse(2 * a, 2 * b, angle)
+    if major < minor:
+        major, minor = minor, major
+    return Ellipse(major, minor, angle)

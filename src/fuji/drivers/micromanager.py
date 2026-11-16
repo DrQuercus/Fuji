@@ -173,7 +173,9 @@ class MMCamera(_MMMixin, Camera):
         return float(self._core.getProperty(self._mm, "Gain"))
 
     def set_gain(self, gain: float) -> None:
-        self._core.setProperty(self._mm, "Gain", gain)
+        # une propriété entière refuse « 12.0 »
+        is_int = int(self._core.getPropertyType(self._mm, "Gain")) == _MM_INT
+        self._core.setProperty(self._mm, "Gain", round(gain) if is_int else float(gain))
 
     def gain_limits(self) -> tuple[float, float]:
         core = self._core
@@ -184,8 +186,24 @@ class MMCamera(_MMMixin, Camera):
             )
         return (0.0, 1000.0)
 
+    def _sequence_running(self) -> bool:
+        try:
+            return bool(self._core.isSequenceRunning(self._mm))
+        except Exception:  # pragma: no cover - dépend de l'adaptateur
+            return False
+
     def _snap(self) -> np.ndarray:
         self._select()
+        if self._sequence_running():
+            # live en cours : Micro-Manager refuse « snapImage » (caméra occupée). On prend
+            # la prochaine image du live entièrement exposée après la demande.
+            exposure_s = self.get_exposure() / 1000
+            t0 = time.monotonic()
+            count = self.latest_frame()[0]
+            while True:
+                count, frame, arrival = self._wait_frame(count, max(5.0, 4 * exposure_s + 2))
+                if arrival >= t0 + 0.9 * exposure_s:
+                    return frame
         self._core.snapImage()
         return np.asarray(self._core.getImage(fix=True))
 
@@ -194,6 +212,8 @@ class MMCamera(_MMMixin, Camera):
         if self.is_live:
             return
         self._select()
+        if self._sequence_running():  # séquence restée ouverte (live interrompu par une erreur)
+            self._core.stopSequenceAcquisition(self._mm)
         self._core.startContinuousSequenceAcquisition(0)
         self._live_stop.clear()
         self._live_thread = threading.Thread(target=self._mm_live_loop, daemon=True, name=f"live-{self.name}")
@@ -201,25 +221,41 @@ class MMCamera(_MMMixin, Camera):
 
     def _mm_live_loop(self) -> None:
         core = self._core
+        errors = 0
         while not self._live_stop.is_set():
-            if core.getRemainingImageCount() > 0:
-                img = None
-                while core.getRemainingImageCount() > 0:
+            img = None
+            try:
+                # ne garder que la plus récente des images en attente. Leur nombre est lu une
+                # seule fois : avec une caméra plus rapide que cette boucle, « tant qu'il en
+                # reste » ne finirait jamais et rien ne serait affiché.
+                for _ in range(int(core.getRemainingImageCount())):
                     img = core.popNextImage(fix=True)
-                if img is not None:
-                    self._publish(np.asarray(img))
+            except Exception:
+                errors += 1
+                if errors > 20:  # caméra perdue : ne pas tourner à vide indéfiniment
+                    log.exception("Live Micro-Manager interrompu (%s)", self.name)
+                    return
+                time.sleep(0.05)
+                continue
+            errors = 0
+            if img is not None:
+                self._publish(np.asarray(img))
             else:
                 time.sleep(0.005)
 
     def stop_live(self) -> None:
-        if not self.is_live:
-            return
         self._live_stop.set()
-        if self._live_thread is not None:
-            self._live_thread.join(timeout=5)
+        thread = self._live_thread
+        if thread is not None:
+            thread.join(timeout=5)
         self._live_thread = None
-        if self._core.isSequenceRunning():
-            self._core.stopSequenceAcquisition()
+        # toujours arrêter la séquence, même si le thread s'est terminé sur une erreur :
+        # sinon la caméra reste « occupée » et toute capture échoue ensuite
+        try:
+            if self._sequence_running():
+                self._core.stopSequenceAcquisition(self._mm)
+        except Exception:  # pragma: no cover - dépend de l'adaptateur
+            log.exception("Impossible d'arrêter la séquence de %s", self.name)
 
     def describe(self) -> dict[str, Any]:
         return {**super().describe(), **self._mm_describe()}
@@ -318,9 +354,12 @@ class MMGeneric(_MMMixin, Device):
 class MMCoreDevice(Device):
     """Le cœur Micro-Manager lui-même : groupes de configuration, déchargement."""
 
-    def __init__(self, name: str, core: Any, **kw: Any) -> None:
+    def __init__(self, name: str, core: Any, *, owns_core: bool = True, **kw: Any) -> None:
         super().__init__(name, **kw)
         self.core = core
+        #: Faux quand le cœur a été fourni par l'appelant (autre logiciel, tests) : on ne
+        #: décharge alors pas ses périphériques à la fermeture.
+        self.owns_core = owns_core
         for group in core.getAvailableConfigGroups():
             presets = tuple(core.getAvailableConfigs(group))
             if not presets:
@@ -336,10 +375,11 @@ class MMCoreDevice(Device):
         self.core.waitForConfig(group, preset)
 
     def shutdown(self) -> None:
-        try:
-            self.core.unloadAllDevices()
-        except Exception:  # pragma: no cover
-            log.exception("Erreur au déchargement de Micro-Manager")
+        if self.owns_core:
+            try:
+                self.core.unloadAllDevices()
+            except Exception:  # pragma: no cover
+                log.exception("Erreur au déchargement de Micro-Manager")
         super().shutdown()
 
 
@@ -384,6 +424,7 @@ def _micromanager(spec: DeviceSpec, ctx: DriverContext) -> list[Device]:
     opts = dict(spec.options)
     core = opts.pop("core", None)
     prefix = str(opts.pop("prefix", ""))
+    owns_core = core is None
     if core is None:
         pmp = _require_pymmcore()
         core = pmp.CMMCorePlus()
@@ -399,7 +440,9 @@ def _micromanager(spec: DeviceSpec, ctx: DriverContext) -> list[Device]:
         else:
             raise FileNotFoundError(f"Configuration Micro-Manager introuvable : {cfg}")
 
-    devices: list[Device] = [MMCoreDevice(spec.name, core, label=spec.label or "Micro-Manager")]
+    devices: list[Device] = [
+        MMCoreDevice(spec.name, core, owns_core=owns_core, label=spec.label or "Micro-Manager")
+    ]
     for mm_label in core.getLoadedDevices():
         if mm_label == "Core":
             continue

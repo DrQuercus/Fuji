@@ -37,7 +37,9 @@ class HistogramWidget(QWidget):
         self.update()
 
     def set_image(self, data: np.ndarray, bit_depth: int | None) -> None:
-        sample = data[::4, ::4]
+        # ~250 000 pixels suffisent, quelle que soit la taille de l'image
+        step = max(1, int(np.sqrt(data.shape[0] * data.shape[1] / 250_000)))
+        sample = data[::step, ::step]
         maxval = float(2**bit_depth - 1) if bit_depth else float(sample.max() or 1)
         planes = [sample[..., i] for i in range(3)] if sample.ndim == 3 else [sample]
         self._hists = [

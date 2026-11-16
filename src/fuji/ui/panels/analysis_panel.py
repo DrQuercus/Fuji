@@ -37,18 +37,44 @@ from ..widgets import hint_label
 _NONE = "(aucune)"
 
 
-def layer_to_image(layer: Any) -> Image:
+def _pixel_size(layer: Any) -> float | None:
     px = layer.metadata.get("pixel_size_um")
     if px is None and float(layer.scale[-1]) != 1.0:
         px = float(layer.scale[-1])
-    return Image(np.asarray(layer.data), px, layer.name, dict(layer.metadata))
+    return px
 
 
-def layer_to_labels(layer: Any) -> Labels:
-    px = layer.metadata.get("pixel_size_um")
-    if px is None and float(layer.scale[-1]) != 1.0:
-        px = float(layer.scale[-1])
-    return Labels(np.asarray(layer.data), px, layer.name)
+def displayed_plane(layer: Any, viewer: ViewerModel) -> tuple[np.ndarray, str]:
+    """Plan 2D actuellement affiché d'un calque (et un suffixe de nom qui le désigne).
+
+    Les opérations d'analyse travaillent sur une image 2D : pour une pile (temps, Z...),
+    on prend le plan visible, comme ImageJ traite la coupe courante.
+    """
+    data = layer.data
+    extra = int(layer.ndim) - 2  # layer.ndim ne compte pas l'axe des couleurs
+    if extra <= 0:
+        return np.asarray(data), ""
+    coords = layer.world_to_data(viewer.dims.point)
+    index = tuple(
+        int(np.clip(round(float(c)), 0, n - 1))
+        for c, n in zip(coords[:extra], data.shape[:extra], strict=True)
+    )
+    return np.asarray(data[index]), " [" + ", ".join(str(i + 1) for i in index) + "]"
+
+
+def layer_to_image(layer: Any, viewer: ViewerModel | None = None) -> Image:
+    """Image d'analyse à partir d'un calque. Avec ``viewer`` : seulement le plan affiché."""
+    if viewer is None:
+        return Image(np.asarray(layer.data), _pixel_size(layer), layer.name, dict(layer.metadata))
+    data, suffix = displayed_plane(layer, viewer)
+    return Image(data, _pixel_size(layer), layer.name + suffix, dict(layer.metadata))
+
+
+def layer_to_labels(layer: Any, viewer: ViewerModel | None = None) -> Labels:
+    if viewer is None:
+        return Labels(np.asarray(layer.data), _pixel_size(layer), layer.name)
+    data, suffix = displayed_plane(layer, viewer)
+    return Labels(data, _pixel_size(layer), layer.name + suffix)
 
 
 class AnalysisPanel(QWidget):
@@ -205,7 +231,11 @@ class AnalysisPanel(QWidget):
                 inputs.append(None)
                 continue
             layer = self.viewer.layers[name]
-            inputs.append(layer_to_image(layer) if spec.kind is Image else layer_to_labels(layer))
+            inputs.append(
+                layer_to_image(layer, self.viewer)
+                if spec.kind is Image
+                else layer_to_labels(layer, self.viewer)
+            )
         params = {w.name: w.value for w in self._params} if self._params is not None else {}
         return inputs, params
 

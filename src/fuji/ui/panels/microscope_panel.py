@@ -64,6 +64,10 @@ class MicroscopePanel(QWidget):
         self._timer.start()
         self.refresh()
 
+    def shutdown(self) -> None:
+        """Arrête le rafraîchissement avant la déconnexion du microscope."""
+        self._timer.stop()
+
     # ------------------------------------------------------------- caméra
     def _camera_section(self, caps: dict[str, bool]) -> QWidget:
         cam = self.m.require_camera()
@@ -124,22 +128,21 @@ class MicroscopePanel(QWidget):
 
     def _auto_exposure(self) -> None:
         cam = self.m.require_camera()
-        _, frame = cam.latest_frame()
-        if frame is None:
-            frame = cam.snap()
-        maxval = 2**cam.bit_depth - 1
-        p = float(np.percentile(frame[::4, ::4], 99.5))
-        if p <= 0:
+        try:
+            cam.auto_expose()
+        except Exception as exc:
+            self.message.emit(f"Exposition automatique impossible : {exc}")
             return
-        target = cam.get_exposure() * 0.7 * maxval / p
-        lo, hi = cam.exposure_limits()
-        cam.set_exposure(float(np.clip(target, lo, hi)))
         self.message.emit(f"Exposition réglée à {cam.get_exposure():.1f} ms")
         self.refresh()
 
     def _white_balance(self) -> None:
         cam = self.m.require_camera()
-        cam.auto_white_balance()
+        try:
+            cam.auto_white_balance()
+        except Exception as exc:
+            self.message.emit(f"Balance des blancs impossible : {exc}")
+            return
         self.message.emit("Balance des blancs effectuée")
 
     # ------------------------------------------------------------- optique

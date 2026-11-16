@@ -7,6 +7,7 @@ manuelles à prévoir, disque plein...).
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import useq
@@ -35,10 +36,22 @@ from fuji.io import OMETiffWriter
 from ..qt_bridge import AcquisitionBridge
 from ..widgets import hint_label, row, section
 
+_IMMERSION_INDEX = {"huile": 1.515, "eau": 1.33, "glycérol": 1.47, "silicone": 1.40}
+
+
+def axial_nyquist_um(na: float, immersion: str = "air", wavelength_um: float = 0.55) -> float:
+    """Pas en Z maximal pour ne rien perdre (champ large) : λ / (2 n (1 − cos α)),
+    avec sin α = ON / n. Vaut environ λ n / ON² pour les petites ouvertures."""
+    n = _IMMERSION_INDEX.get(immersion, 1.0)
+    alpha = math.asin(min(na / n, 0.999))
+    return wavelength_um / (2 * n * (1 - math.cos(alpha)))
+
 
 class AcquisitionPanel(QWidget):
     frame_ready = Signal(object, object)  # useq.MDAEvent, Frame
     acquisition_done = Signal(object)  # AcquisitionSummary
+    #: émis juste avant le lancement (la fenêtre arrête le live et verrouille les réglages)
+    starting = Signal()
     message = Signal(str)
 
     def __init__(self, microscope: Microscope, parent: QWidget | None = None) -> None:
@@ -194,6 +207,10 @@ class AcquisitionPanel(QWidget):
             kwargs["z_plan"] = {"range": self.z_range.value(), "step": self.z_step.value()}
         if self._positions:
             kwargs["stage_positions"] = [{"x": x, "y": y} for x, y in self._positions]
+        if len(kwargs) == 1:
+            # rien de coché : une séquence sans axe ne contient aucune image ; on en veut une,
+            # avec les réglages actuels
+            kwargs["time_plan"] = {"interval": 0, "loops": 1}
         return useq.MDASequence(**kwargs)
 
     def update_plan(self) -> None:
@@ -209,10 +226,8 @@ class AcquisitionPanel(QWidget):
         self.warn_label.setText("\n".join(f"⚠ {w}" for w in plan.warnings))
         obj = self.m.objective
         if self.use_z.isChecked() and obj is not None:
-            # Nyquist axial ≈ λ / (2 n (1 − cos θ)) / 2 ; approximation simple λ/(ON²)/2
-            n_medium = 1.515 if obj.immersion == "huile" else (1.33 if obj.immersion == "eau" else 1.0)
-            dz = 0.55 * n_medium / (obj.na**2) / 2
-            self._z_nyquist.setText(f"Pas conseillé pour {obj.label} : ≈ {dz:.2f} µm (Nyquist).")
+            dz = axial_nyquist_um(obj.na, obj.immersion)
+            self._z_nyquist.setText(f"Pas conseillé pour {obj.label} : ≤ {dz:.2f} µm (Nyquist).")
         else:
             self._z_nyquist.setText("")
 
@@ -239,8 +254,12 @@ class AcquisitionPanel(QWidget):
     def start(self) -> None:
         if self.engine.is_running:
             return
-        seq = self.sequence()
-        plan = plan_acquisition(self.m, seq, self.folder.text())
+        try:
+            seq = self.sequence()
+            plan = plan_acquisition(self.m, seq, self.folder.text())
+        except Exception as exc:
+            QMessageBox.warning(self, "Acquisition", f"Séquence invalide : {exc}")
+            return
         if plan.warnings:
             answer = QMessageBox.question(
                 self,
@@ -252,7 +271,12 @@ class AcquisitionPanel(QWidget):
         settings = QSettings("Fuji", "Fuji")
         settings.setValue("acq/name", self.name.text())
         settings.setValue("acq/folder", self.folder.text())
-        writer = OMETiffWriter(self.folder.text(), self.name.text())
+        try:
+            writer = OMETiffWriter(self.folder.text(), self.name.text())
+        except Exception as exc:  # dossier protégé, disque absent, nom invalide...
+            QMessageBox.warning(self, "Acquisition", f"Impossible d'enregistrer dans ce dossier :\n\n{exc}")
+            return
+        self.starting.emit()
         self.progress.setRange(0, plan.n_frames)
         self.progress.setValue(0)
         self.progress.setVisible(True)

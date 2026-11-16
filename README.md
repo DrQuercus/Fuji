@@ -176,6 +176,13 @@ ouverture numérique, calibration), canaux (fond clair, DAPI, GFP...). Profils f
 Les calibrations sont enregistrées dans `~/.fuji/profiles/` sans jamais modifier les
 profils fournis.
 
+## État de validation
+
+Le code a été entièrement relu et chaque défaut corrigé est couvert par un test
+(plus de 140 tests). Tout cela tourne sur du **matériel simulé** : la vraie caméra ToupTek,
+macOS et la comparaison directe avec ImageJ restent à valider — voir
+[la feuille de route](docs/FEUILLE_DE_ROUTE.md).
+
 ## Tests
 
 ```bash
