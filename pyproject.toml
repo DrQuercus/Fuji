@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fuji-microscopy"
-version = "0.1.0.dev0"
+version = "0.5.0"
 description = "Logiciel de microscopie : acquisition multi-microscopes, assistants d'alignement et analyse d'images (napari + Micro-Manager + Fiji)."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -51,6 +51,42 @@ fuji = "fuji.cli:main"
 [project.entry-points."fuji.drivers"]
 
 [project.entry-points."fuji.operations"]
+
+# ----------------------------------------------------------- application empaquetée
+# « briefcase package macOS » fabrique Fuji.app et son .dmg : voir docs/INSTALLATION_MAC.md.
+# Le nom, la version, la licence et les dépendances de base viennent de [project].
+[tool.briefcase]
+project_name = "Fuji"
+bundle = "io.github.drquercus"
+author = "Les contributeurs de Fuji"
+url = "https://github.com/DrQuercus/Fuji"
+
+[tool.briefcase.app.fuji]
+formal_name = "Fuji"
+description = "Microscopie : acquisition, assistants d'alignement et analyse d'images"
+icon = "packaging/icons/fuji"
+sources = ["src/fuji"]
+# L'application contient tout ce que propose « pip install fuji-microscopy[all] ».
+# (Liste à garder identique aux options de [project.optional-dependencies] : un test le vérifie.)
+requires = [
+    "napari[pyqt6]>=0.5",
+    "magicgui>=0.8",
+    "superqt>=0.6",
+    "pymmcore-plus>=0.13",
+    "pyimagej>=1.5",
+    "pyserial>=3.5",
+    "mcp>=2.0",
+    "uvicorn>=0.30",
+    "pillow>=10",
+]
+permission.camera = "Fuji affiche et enregistre l'image de la caméra du microscope."
+
+[tool.briefcase.app.fuji.macOS]
+# Un .dmg par type de processeur (Apple Silicon, Intel) : plus petit et plus sûr à
+# construire qu'une application « universelle ».
+universal_build = false
+min_os_version = "13.0"
+info."NSLocalNetworkUsageDescription" = "Fuji se connecte aux moteurs ou au microscope branchés sur un autre ordinateur du réseau."
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fuji"]

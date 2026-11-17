@@ -20,6 +20,15 @@ def _cmd_gui(args: argparse.Namespace) -> int:
     return run_app(args.profile)
 
 
+def _cmd_selftest(args: argparse.Namespace) -> int:
+    try:
+        from fuji.ui.selftest import run
+    except ImportError as exc:
+        print(f'Interface indisponible ({exc}).\nInstalle-la avec : pip install "fuji-microscopy[gui]"')
+        return 1
+    return run(args.report, args.screenshot)
+
+
 def _cmd_profiles(_: argparse.Namespace) -> int:
     from fuji.core.profile import MicroscopeProfile, available_profiles
 
@@ -196,6 +205,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("drivers", help="liste les pilotes de périphériques")
     sub.add_parser("operations", help="liste les opérations d'analyse")
     sub.add_parser("check", help="diagnostic de l'installation")
+    st = sub.add_parser("selftest", help="essai automatique de l'interface sur le microscope simulé")
+    st.add_argument("--report", help="fichier JSON où écrire le détail de l'essai")
+    st.add_argument("--screenshot", help="fichier image où enregistrer la fenêtre")
     tp = sub.add_parser("touptek", help="SDK et caméras ToupTek")
     tp.add_argument("action", choices=["install", "info"])
     tp.add_argument("source", nargs="?", help="toupcamsdk.zip ou dossier du SDK")
@@ -239,6 +251,7 @@ def main(argv: list[str] | None = None) -> int:
         "drivers": _cmd_drivers,
         "operations": _cmd_operations,
         "check": _cmd_check,
+        "selftest": _cmd_selftest,
         "touptek": _cmd_touptek,
         "snap": _cmd_snap,
         "moteurs": _cmd_moteurs,
