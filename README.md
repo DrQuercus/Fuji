@@ -4,7 +4,7 @@ Logiciel de microscopie qui réunit le meilleur de **Micro-Manager** (piloter le
 matériel), **napari** (afficher les images) et **Fiji/ImageJ** (analyser), dans une
 interface propre qui s'adapte au microscope.
 
-> Projet en développement (version 0.8). Voir
+> Projet en développement (version 0.8.1). Voir
 > [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) et [docs/FEUILLE_DE_ROUTE.md](docs/FEUILLE_DE_ROUTE.md).
 
 ![Interface de Fuji : espace Microscope, live sur le microscope simulé](docs/interface.png)
@@ -30,6 +30,12 @@ l'image reprend exposition, gain, objectif et canal.
 Chaque capture (bouton **Capturer**, Ctrl+K) est **enregistrée automatiquement** dans
 `~/Fuji/Captures/<date>` et rejoint la liste **Images**, commune aux deux espaces : un
 double-clic l'ouvre dans Analyse. On peut y renommer ou supprimer les images.
+
+Dans Analyse, **une image à la fois** : ouvrir une image de la liste **remplace** celle qui
+est ouverte, avec ses résultats (Fuji demande avant de fermer des masques ou des ROI). Pour
+en garder plusieurs ouvertes (comparer, calculer entre deux images) : clic droit →
+« Ouvrir à côté » ; on choisit alors l'image affichée dans la barre sous l'image. Le
+bouton **Fermer** de cette barre (Ctrl+W) ferme l'image affichée et ses résultats.
 
 ![Espace Analyse : la liste des images reste ouverte à côté des outils](docs/images-prises.png)
 

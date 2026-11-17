@@ -243,3 +243,125 @@ def test_window_stays_laptop_height_with_tall_layer_controls(window):
     for name in ("masque", "ROI"):
         window.viewer.layers.selection.active = window.viewer.layers[name]
         assert window.side.minimumSizeHint().height() < 460, name
+
+
+# ------------------------------------------------- ouvrir, fermer, changer d'image
+def _three_captures(window, qtbot):
+    for pos in ((0, 0), (300, 150), (-200, 80)):
+        window.m.xy_stage.move_to(*pos)
+        window._on_snap(window.m.snap())
+        qtbot.waitUntil(lambda: not window.gallery._reserved, timeout=10000)
+    return window.gallery
+
+
+def _layers(window):
+    return [(ly.name, ly.visible) for ly in window.viewer.layers]
+
+
+def test_opening_an_image_replaces_the_open_one(window, qtbot):
+    gallery = _three_captures(window, qtbot)
+    asked = []
+    window._ask_close = lambda docs, lost, opening: asked.append(docs) or "close"
+    gallery.list.setCurrentRow(2)
+    gallery.open_selected()
+    assert _layers(window) == [("capture_001", True)] and window.mode == "analyse"
+    gallery.list.setCurrentRow(1)
+    gallery.open_selected()  # remplace, sans question : pas de résultat à perdre
+    assert _layers(window) == [("capture_002", True)] and asked == []
+
+    # avec un résultat (masque) et une ROI : on demande ; « Annuler » ne change rien
+    panel = window.analysis
+    panel.select_operation("Seuillage automatique")
+    panel._run()
+    qtbot.waitUntil(lambda: not panel._busy, timeout=20000)
+    panel.set_tool("shapes", "add_rectangle")
+    window.viewer.layers["ROI"].add_rectangles([[10, 10], [40, 60]])
+    window._ask_close = lambda docs, lost, opening: asked.append((docs, opening)) or "cancel"
+    gallery.list.setCurrentRow(0)
+    gallery.open_selected()
+    assert asked == [(["capture_002"], True)]
+    assert [n for n, _ in _layers(window)] == ["capture_002", "capture_002 (masque Default)", "ROI"]
+
+    # « Garder ouverte » : la nouvelle image est seule visible, on passe de l'une à l'autre
+    window._ask_close = lambda docs, lost, opening: "keep"
+    gallery.open_selected()
+    assert _layers(window)[-1] == ("capture_003", True)
+    assert not window.viewer.layers["capture_002"].visible
+    assert not window.viewer.layers["capture_002 (masque Default)"].visible
+    assert window.viewer.layers["ROI"].visible  # les ROI sont communes, comme le ROI Manager
+    bar = window.display_bar
+    assert not bar.doc_combo.isHidden() and bar.name_label.isHidden()
+    assert [bar.doc_combo.itemData(i) for i in range(bar.doc_combo.count())] == ["capture_002", "capture_003"]
+    bar.doc_combo.activated.emit(0)
+    assert window.viewer.layers["capture_002"].visible and not window.viewer.layers["capture_003"].visible
+    assert bar.layer.name == "capture_002"
+    # rouvrir une image déjà ouverte la remontre, sans la dupliquer
+    gallery.list.setCurrentRow(0)
+    gallery.open_selected()
+    assert window.viewer.layers["capture_003"].visible and len(window.viewer.layers) == 4
+
+    # « Fermer » : l'image affichée et ses résultats ; la dernière emporte les ROI
+    window._ask_close = lambda docs, lost, opening: "close"
+    window.show_document("capture_002")
+    bar.close_btn.click()
+    assert [n for n, _ in _layers(window)] == ["ROI", "capture_003"]
+    assert window.viewer.layers["capture_003"].visible and bar.name_label.text() == "capture_003"
+    window.close_image()  # Ctrl+W
+    assert len(window.viewer.layers) == 0 and bar.name_label.text() == "Aucune image"
+
+
+def test_close_asks_only_when_results_would_be_lost(window, qtbot, monkeypatch):
+    from qtpy.QtWidgets import QMessageBox
+
+    gallery = _three_captures(window, qtbot)
+    gallery.list.setCurrentRow(0)
+    gallery.open_selected()
+    shown = []
+    monkeypatch.setattr(QMessageBox, "exec", lambda box: shown.append(box.text()) or 0)
+    window.close_image()  # aucune perte : pas de question
+    assert shown == [] and len(window.viewer.layers) == 0
+    gallery.open_selected()
+    window.analysis.set_tool("shapes", "add_ellipse")
+    window.viewer.layers["ROI"].add_ellipses([[10, 10], [40, 60]])
+    window.close_image()  # la question s'affiche ; sans réponse (fenêtre fermée) : on annule
+    assert shown == ["Fermer capture_003 et ses résultats ?"] and len(window.viewer.layers) == 2
+
+
+def test_deleted_or_renamed_images_follow_in_analysis(window, qtbot, monkeypatch):
+    from qtpy.QtWidgets import QInputDialog, QMessageBox
+
+    gallery = _three_captures(window, qtbot)
+    gallery.list.setCurrentRow(0)
+    gallery.open_selected()
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("lame A", True))
+    gallery.rename_selected()
+    assert [n for n, _ in _layers(window)] == ["lame A"]
+    assert window.viewer.layers["lame A"].metadata["source"].endswith("lame A.ome.tif")
+    gallery.open_selected()  # rouvrir après le renommage : pas de doublon
+    assert len(window.viewer.layers) == 1
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    gallery.delete_selected()  # supprimée de la liste : elle se ferme aussi dans Analyse
+    assert len(window.viewer.layers) == 0
+
+
+def test_napari_layer_and_view_buttons_work(window):
+    """Ces boutons passaient par les « actions » de napari, sans effet dans Fuji."""
+    import numpy as np
+
+    viewer, qt = window.viewer, window.qt_viewer
+    viewer.add_image(np.zeros((4, 30, 40), np.uint8), name="a")
+    viewer.add_image(np.zeros((30, 40), np.uint8), name="b")
+    viewer.layers.selection = {viewer.layers["b"]}
+    qt.layerButtons.deleteButton.click()
+    assert [ly.name for ly in viewer.layers] == ["a"]
+    viewer.camera.zoom = 20
+    qt.viewerButtons.resetViewButton.click()
+    assert viewer.camera.zoom < 20
+    qt.viewerButtons.ndisplayButton.click()
+    assert viewer.dims.ndisplay == 3
+    qt.viewerButtons.ndisplayButton.click()
+    assert viewer.dims.ndisplay == 2
+    grid = getattr(viewer, "grid", None) or viewer.canvas.grid
+    qt.viewerButtons.gridViewButton.click()
+    assert grid.enabled
+    assert qt.viewerButtons.consoleButton.isHidden()

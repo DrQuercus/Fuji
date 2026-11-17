@@ -55,6 +55,7 @@ from fuji.core.microscope import Microscope
 from fuji.core.profile import MicroscopeProfile, available_profiles
 from fuji.io import save_image
 
+from . import documents
 from .chrome import PINNED, SECTIONS, Sidebar, TopBar, mode_of, sections_of
 from .components import PanelHeader, icon_button
 from .compose_panel import ComposePanel
@@ -117,11 +118,44 @@ def _scroll(widget: QWidget) -> QScrollArea:
     return area
 
 
+def fix_napari_buttons(qt_viewer: QtViewer) -> None:
+    """Les boutons de napari qui passent par ses « actions » (supprimer un calque, recentrer,
+    grille, 3D...) cherchent la fenêtre napari courante : Fuji n'en a pas (il intègre la vue
+    seule), et ces boutons ne faisaient rien. On les relie directement à la bonne vue."""
+    viewer = qt_viewer.viewer
+    lb, vb = qt_viewer.layerButtons, qt_viewer.viewerButtons
+
+    def toggle_3d() -> None:
+        viewer.dims.ndisplay = 2 if viewer.dims.ndisplay == 3 else 3
+
+    def toggle_grid() -> None:
+        grid = getattr(viewer, "grid", None) or viewer.canvas.grid
+        grid.enabled = not grid.enabled
+
+    slots = (
+        (lb.deleteButton, viewer.layers.remove_selected, "Fermer les calques sélectionnés"),
+        (vb.resetViewButton, viewer.reset_view, "Recentrer l'image (Ctrl+R)"),
+        (vb.ndisplayButton, toggle_3d, "Vue 2D / 3D (piles Z)"),
+        (vb.rollDimsButton, viewer.dims.roll, "Faire tourner l'ordre des axes"),
+        (vb.transposeDimsButton, viewer.dims.transpose, "Échanger les deux axes affichés"),
+        (vb.gridViewButton, toggle_grid, "Calques côte à côte (grille)"),
+    )
+    for button, slot, tip in slots:
+        try:
+            button.clicked.disconnect()
+        except (TypeError, RuntimeError):
+            pass
+        button.clicked.connect(lambda _=False, f=slot: f())
+        button.setToolTip(tip)
+    vb.consoleButton.hide()  # la console Python de napari n'existe pas dans Fuji
+
+
 class LayersPanel(QWidget):
     """Les widgets de calques de napari, regroupés dans le panneau latéral."""
 
     def __init__(self, qt_viewer: QtViewer, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        fix_napari_buttons(qt_viewer)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(8)
@@ -203,6 +237,8 @@ class MainWindow(QMainWindow):
         # espace Analyse : histogramme et contraste de l'image affichée, toujours sous l'image
         self.display_bar = DisplayBar(self.viewer)
         self.display_bar.message.connect(self.notify)
+        self.display_bar.close_requested.connect(lambda: self.close_image())
+        self.display_bar.document_chosen.connect(self.show_document)
         pages[1].addWidget(self.display_bar)
 
         # panneau de gauche : toujours ouvert (Contrôle, ou Images en analyse)
@@ -281,6 +317,8 @@ class MainWindow(QMainWindow):
         self._set_page("layers", LayersPanel(self.qt_viewer))
         self.gallery = GalleryPanel()
         self.gallery.open_requested.connect(self.open_capture)
+        self.gallery.deleted.connect(self._on_images_deleted)
+        self.gallery.renamed.connect(self._on_image_renamed)
         self.gallery.open_file_requested.connect(self.open_dialog)
         self.gallery.message.connect(self.notify)
         self.gallery.count_changed.connect(lambda n: self.sidebar.set_badge("images", f"({n})" if n else ""))
@@ -717,6 +755,7 @@ class MainWindow(QMainWindow):
         m_file.addAction(self._action("Ouvrir une image…", self.open_dialog, "Ctrl+O"))
         m_file.addAction(self._action("Enregistrer le calque…", self.save_layer, "Ctrl+S"))
         m_file.addAction(self._action("Exporter la vue (PNG)…", self.export_view, "Ctrl+Shift+E"))
+        m_file.addAction(self._action("Fermer l'image", lambda: self.close_image(), "Ctrl+W"))
         m_file.addSeparator()
         m_file.addAction(self._action("Nouveau microscope…", self.new_profile, "Ctrl+N"))
         m_file.addAction(self._action("Modifier le microscope…", lambda: self.edit_profile(None), "Ctrl+E"))
@@ -1009,19 +1048,120 @@ class MainWindow(QMainWindow):
         info = self.gallery.add_image(image, kind="mosaique", summary=name, pixel_size_um=pixel_size_um)
         self.notify(f"{name} assemblée : {info.name}, dans la liste « Images »")
 
-    def open_capture(self, info: Any, data: np.ndarray | None = None) -> None:
-        """Ouvre une image de la liste dans l'espace Analyse (ou la remontre si elle y est)."""
-        if info.name in self.viewer.layers:
-            self.viewer.layers.selection.active = self.viewer.layers[info.name]
-        elif data is not None:
-            self.add_frame(data, info.name, {**info.metadata, "source": str(info.path)}, info.pixel_size_um)
-        elif info.path.exists():
-            self.open_file(info.path)
-        else:
+    def open_capture(self, info: Any, data: np.ndarray | None = None, keep: bool = False) -> None:
+        """Ouvre une image de la liste dans l'espace Analyse, à la place de l'image ouverte
+        (``keep`` : à côté, les autres restent ouvertes et cachées). Déjà ouverte : on la
+        remontre."""
+        if info.name in documents.documents(self.viewer):
+            self.show_document(info.name)
+        elif data is None and not info.path.exists():
             QMessageBox.warning(self, "Ouvrir", f"Fichier introuvable :\n{info.path}")
             return
+        else:
+            if not self._make_room(keep):
+                return
+            if data is not None:
+                metadata = {**info.metadata, "source": str(info.path)}
+                self.add_frame(data, info.name, metadata, info.pixel_size_um)
+            else:
+                self.open_file(info.path, doc=info.name)
+            self.show_document(info.name)
+            self.viewer.reset_view()
         if self.mode != "analyse":
             self.set_mode("analyse", "analysis")
+
+    # ------------------------------------------------------------ images ouvertes
+    def show_document(self, doc: str) -> None:
+        """Affiche une des images ouvertes ; les autres restent ouvertes, cachées."""
+        if doc in documents.documents(self.viewer):
+            documents.show_only(self.viewer, doc)
+
+    def _make_room(self, keep: bool) -> bool:
+        """Avant d'ouvrir une image : ferme celles qui sont ouvertes (ou les cache si
+        ``keep``). Faux si l'utilisateur annule."""
+        docs = documents.documents(self.viewer)
+        if not docs and not self.viewer.layers:
+            return True
+        if not keep:
+            choice = self._confirm_close(docs, opening=True)
+            if choice == "cancel":
+                return False
+            keep = choice == "keep"
+        if keep:
+            for layer in self.viewer.layers:
+                if documents.doc_of(layer) is not None:
+                    layer.visible = False
+        else:
+            self.analysis.leave()
+            documents.close(self.viewer, docs)
+        return True
+
+    def close_image(self, doc: str | None = None) -> bool:
+        """« Fermer » : l'image affichée et ses résultats (masques, aperçus...). Avec la
+        dernière image, les ROI dessinées sont fermées aussi. Les tableaux restent."""
+        if doc is None:
+            layer = self.display_bar.layer
+            doc = documents.doc_of(layer) if layer is not None else None
+        if doc is None:
+            docs = documents.documents(self.viewer)
+            if not docs:
+                if self.viewer.layers:  # restent des ROI ou des calques sans image
+                    self.viewer.layers.clear()
+                return True
+            doc = docs[-1]
+        if self._confirm_close([doc]) == "cancel":
+            return False
+        self.analysis.leave()
+        documents.close(self.viewer, [doc])
+        self.notify(f"{doc} fermée")
+        return True
+
+    def _confirm_close(self, docs: list[str], opening: bool = False) -> str:
+        """« close », « keep » (garder ouverte, seulement en ouvrant une autre image) ou
+        « cancel ». On ne demande que si des résultats seraient perdus : les images, elles,
+        sont enregistrées."""
+        lost = documents.results_lost(self.viewer, docs)
+        if not lost:
+            return "close"
+        return self._ask_close(docs, lost, opening)
+
+    def _ask_close(self, docs: list[str], lost: list[Any], opening: bool) -> str:
+        names = ", ".join(ly.name for ly in lost[:4]) + (" …" if len(lost) > 4 else "")
+        which = docs[0] if len(docs) == 1 else f"{len(docs)} images"
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("Fermer l'image")
+        box.setText(f"Fermer {which} et ses résultats ?")
+        box.setInformativeText(
+            f"{len(lost)} calque(s) de résultats seront fermés : {names}.\n"
+            "Les tableaux de résultats restent ; enregistrez un masque avec Fichier → "
+            "Enregistrer le calque si vous voulez le garder."
+        )
+        close_btn = box.addButton("Fermer", QMessageBox.ButtonRole.AcceptRole)
+        keep_btn = box.addButton("Garder ouverte", QMessageBox.ButtonRole.ActionRole) if opening else None
+        box.addButton("Annuler", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(close_btn)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is close_btn:
+            return "close"
+        if keep_btn is not None and clicked is keep_btn:
+            return "keep"
+        return "cancel"
+
+    def _on_images_deleted(self, infos: list[Any]) -> None:
+        """Images supprimées de la liste : elles se ferment dans Analyse (sans question)."""
+        open_docs = documents.documents(self.viewer)
+        gone = [info.name for info in infos if info.name in open_docs]
+        if gone:
+            self.analysis.leave()
+            documents.close(self.viewer, gone)
+
+    def _on_image_renamed(self, old: str, info: Any) -> None:
+        documents.rename(self.viewer, old, info.name)
+        for layer in documents.layers_of(self.viewer, info.name):
+            if documents.is_source(layer):
+                layer.metadata["source"] = str(info.path)
 
     def add_frame(
         self,
@@ -1043,6 +1183,7 @@ class MainWindow(QMainWindow):
         )
         layer.metadata.update(metadata or {})
         layer.metadata["pixel_size_um"] = pixel_size_um
+        documents.tag(layer, name, source=True)
 
     def _on_acq_starting(self) -> None:
         """Juste avant une acquisition : le live s'arrête et les réglages se verrouillent,
@@ -1081,11 +1222,16 @@ class MainWindow(QMainWindow):
             str(Path.home()),
             "Images (*.tif *.tiff *.png *.jpg *.jpeg *.bmp);;Tous les fichiers (*)",
         )
-        if path:
-            self.open_file(path)
+        if path and self._make_room(keep=False):
+            doc = self.open_file(path)
+            if doc is not None:
+                self.show_document(doc)
+                self.viewer.reset_view()
             self.set_mode("analyse")
 
-    def open_file(self, path: str | Path) -> None:
+    def open_file(self, path: str | Path, doc: str | None = None) -> str | None:
+        """Ajoute un fichier image à l'espace Analyse ; renvoie le nom de l'image ouverte
+        (tous ses canaux forment une seule image, qui se ferme d'un bloc)."""
         from fuji.analysis.image import read_pixel_size_um
 
         path = Path(path)
@@ -1111,7 +1257,7 @@ class MainWindow(QMainWindow):
                 data, axes, px = io.imread(path), "", None
         except Exception as exc:
             QMessageBox.warning(self, "Ouvrir", f"Impossible de lire {path.name} : {exc}")
-            return
+            return None
         rgb = axes.endswith("S") or (not axes and data.ndim == 3 and data.shape[-1] in (3, 4))
         name = path.stem.replace(".ome", "")
         scale = [1.0] * (data.ndim - (1 if rgb else 0))
@@ -1144,10 +1290,13 @@ class MainWindow(QMainWindow):
             if px:
                 kwargs["units"] = ("µm",) * len(scale)
             layers = self.viewer.add_image(data, name=name, scale=scale, **kwargs)
+        doc = doc or name
         for layer in layers if isinstance(layers, list) else [layers]:
             layer.metadata["pixel_size_um"] = px
             layer.metadata["source"] = str(path)
+            documents.tag(layer, doc, source=True)
         self.notify(f"Ouvert : {path.name} ({axes or data.shape})")
+        return doc
 
     def save_layer(self) -> None:
         layer = self.viewer.layers.selection.active

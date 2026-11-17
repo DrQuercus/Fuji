@@ -57,6 +57,7 @@ from fuji.analysis.guide import GUESS, RECIPES, Recipe, help_of
 from fuji.analysis.imagej import open_in_fiji
 from fuji.analysis.registry import Operation, combine_planes
 
+from .. import documents
 from ..components import button, icon_button, label, separator
 from ..flow import FlowLayout
 from .tool_menu import RecipePage, ToolMenu
@@ -799,6 +800,8 @@ class AnalysisPanel(QWidget):
             self._clear_preview()
         primary = self._primary_layer()
         offset = tuple(primary.translate[-2:]) if primary is not None else (0.0, 0.0)
+        # les résultats appartiennent à l'image traitée : ils se ferment avec elle
+        doc = documents.doc_of(primary) if primary is not None else None
         items = out if isinstance(out, tuple) else (out,)
         for item in items:
             if item is None:
@@ -807,7 +810,7 @@ class AnalysisPanel(QWidget):
                 if not preview:
                     self.table_ready.emit(item)
                 continue
-            self._add_layer(item, offset, PREVIEW_PREFIX if preview else "")
+            self._add_layer(item, offset, PREVIEW_PREFIX if preview else "", doc)
         if preview:
             if selected is not None and selected.name in self.viewer.layers:
                 self.viewer.layers.selection.active = selected
@@ -817,7 +820,7 @@ class AnalysisPanel(QWidget):
             self._done.add(self._step)
             self._update_banner(done=True)
 
-    def _add_layer(self, item: Any, offset: tuple[float, float], prefix: str) -> None:
+    def _add_layer(self, item: Any, offset: tuple[float, float], prefix: str, doc: str | None = None) -> None:
         px = item.pixel_size_um or 1.0
         name = prefix + item.name
         if isinstance(item, Rois):
@@ -861,6 +864,7 @@ class AnalysisPanel(QWidget):
             else:
                 layer = self.viewer.add_image(data, rgb=rgb, **kwargs)
         layer.metadata["pixel_size_um"] = item.pixel_size_um
+        documents.tag(layer, doc)
 
     def _open_in_fiji(self) -> None:
         layer = self.viewer.layers.selection.active

@@ -21,6 +21,7 @@ voisinages, conversions de type, définitions des mesures).
 | « Process all slices ? » | case **Toute la pile** |
 | Set Scale | **Analyse → Définir l'échelle…** (à partir d'une ligne de longueur connue) |
 | Command Finder (`L`) | la recherche du panneau : elle comprend aussi les noms anglais d'ImageJ (« threshold », « z project »…), sans tenir compte des accents |
+| Fenêtres d'images, File → Close (`Ctrl+W`) | une image affichée à la fois ; **Fermer** sous l'image (`Ctrl+W`) ; clic droit → « Ouvrir à côté » dans la liste pour en garder plusieurs, à choisir sous l'image |
 | Flatten + Scale Bar | **Fichier → Exporter la vue (PNG)** : image, ROI et barre d'échelle |
 | Results | le volet **Résultats** : tableau, graphique, export CSV, copie vers Excel |
 | Brightness/Contrast (Auto, Reset), LUT | la **barre d'affichage** sous l'image : histogramme et bornes à la souris, min / max, **Auto** (0,35 % saturés), **Tout**, gamma, couleur ; comme dans ImageJ tant qu'on ne clique pas sur « Apply », seules les couleurs affichées changent |

@@ -153,6 +153,23 @@ après ce premier essai :
 - [x] Recherche sans accents ni majuscules, dans les noms, les explications et les noms
       ImageJ (« seuil », « compter », « Gaussian Blur »)
 
+## Version 0.8.1 (fait) — ouvrir et fermer les images
+
+Corrections après essai : une image ouverte dans Analyse ne se fermait plus, et l'ancienne
+restait quand on en ouvrait une autre.
+
+- [x] La corbeille du panneau **Calques** ne faisait rien (ni le bouton « recentrer », la
+      grille, la 3D) : ces boutons de napari cherchaient une fenêtre napari que Fuji n'a pas.
+      Ils sont reliés directement à la vue
+- [x] **Une image à la fois** : ouvrir une image de la liste remplace celle qui est ouverte
+      (et ses résultats) ; Fuji ne demande que si des masques ou des ROI seraient perdus
+      (« Fermer », « Garder ouverte », « Annuler »)
+- [x] Bouton **Fermer** sous l'image et Fichier → Fermer l'image (Ctrl+W)
+- [x] Plusieurs images ouvertes (clic droit → « Ouvrir à côté ») : une seule est affichée,
+      on choisit laquelle sous l'image ; chacune garde ses résultats
+- [x] Supprimer une image de la liste la ferme aussi dans Analyse ; la renommer renomme
+      l'image ouverte (avant, la rouvrir créait un doublon)
+
 ## Prochaines étapes
 
 ### 1. Valider sur ton matériel (priorité)

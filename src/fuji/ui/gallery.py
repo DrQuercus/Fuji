@@ -82,8 +82,13 @@ def captures_root() -> Path | None:
 
 
 class GalleryPanel(QWidget):
-    #: ouvrir une image dans l'espace Analyse : (CaptureInfo, données en mémoire ou None)
-    open_requested = Signal(object, object)
+    #: ouvrir une image dans l'espace Analyse : (CaptureInfo, données en mémoire ou None,
+    #: garder les images déjà ouvertes)
+    open_requested = Signal(object, object, bool)
+    #: images supprimées (liste de CaptureInfo) : à fermer si elles sont ouvertes
+    deleted = Signal(list)
+    #: image renommée : (ancien nom, nouvelle CaptureInfo)
+    renamed = Signal(str, object)
     open_file_requested = Signal()
     message = Signal(str)
     count_changed = Signal(int)
@@ -122,7 +127,7 @@ class GalleryPanel(QWidget):
         self.list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._menu)
-        self.list.itemDoubleClicked.connect(lambda item: self.open_item(item))
+        self.list.itemDoubleClicked.connect(lambda item: self.open_item(item))  # remplace
         self.list.itemSelectionChanged.connect(self._update_buttons)
         self.empty = EmptyState(
             "gallery",
@@ -135,7 +140,13 @@ class GalleryPanel(QWidget):
         self.views.addWidget(self.list)
         lay.addWidget(self.views, 1)
 
-        self.open_btn = button("Ouvrir dans Analyse", "chart", primary=True)
+        self.open_btn = button(
+            "Ouvrir dans Analyse",
+            "chart",
+            primary=True,
+            tooltip="Remplace l'image ouverte dans Analyse. Pour en garder plusieurs ouvertes : "
+            "clic droit → « Ouvrir à côté »",
+        )
         self.open_btn.clicked.connect(self.open_selected)
         self.rename_btn = button("Renommer", "edit")
         self.rename_btn.clicked.connect(self.rename_selected)
@@ -317,14 +328,17 @@ class GalleryPanel(QWidget):
     def selected(self) -> list[CaptureInfo]:
         return [item.data(_INFO) for item in self.list.selectedItems()]
 
-    def open_item(self, item: QListWidgetItem) -> None:
+    def open_item(self, item: QListWidgetItem, keep: bool = False) -> None:
+        """Ouvre l'image dans Analyse, à la place de celle qui y est (``keep`` : à côté)."""
         info: CaptureInfo = item.data(_INFO)
         data = self._memory.get(info.name)
-        self.open_requested.emit(info, data if data is not None else self._unsaved.get(info.name))
+        self.open_requested.emit(info, data if data is not None else self._unsaved.get(info.name), keep)
 
-    def open_selected(self) -> None:
-        for item in reversed(self.list.selectedItems()):
-            self.open_item(item)
+    def open_selected(self, keep: bool = False) -> None:
+        """Plusieurs images choisies : la première remplace l'image ouverte, les autres
+        s'ouvrent à côté."""
+        for i, item in enumerate(reversed(self.list.selectedItems())):
+            self.open_item(item, keep=keep or i > 0)
 
     def rename_selected(self) -> None:
         items = self.list.selectedItems()
@@ -347,6 +361,7 @@ class GalleryPanel(QWidget):
         items[0].setData(_INFO, renamed)
         self._describe(items[0])
         self.message.emit(f"Renommée : {renamed.name}")
+        self.renamed.emit(info.name, renamed)
 
     def delete_selected(self) -> None:
         items = self.list.selectedItems()
@@ -375,12 +390,14 @@ class GalleryPanel(QWidget):
             self._memory.pop(info.name, None)
             self.list.takeItem(self.list.row(item))
         self._changed()
+        self.deleted.emit(infos)
 
     def _menu(self, pos: Any) -> None:
         if not self.list.selectedItems():
             return
         menu = QMenu(self)
-        menu.addAction("Ouvrir dans Analyse", self.open_selected)
+        menu.addAction("Ouvrir dans Analyse (remplace l'image ouverte)", self.open_selected)
+        menu.addAction("Ouvrir à côté (garder les images ouvertes)", lambda: self.open_selected(keep=True))
         if self.rename_btn.isEnabled():
             menu.addAction("Renommer…", self.rename_selected)
         menu.addAction("Afficher dans le Finder", lambda: self.show_folder(self.selected()[0].path.parent))

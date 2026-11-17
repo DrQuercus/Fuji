@@ -74,7 +74,8 @@
 | `core/compose.py` | Images composées en direct : profondeur de champ étendue (`FocusStacker`), panorama à la main (`LiveMosaic`) |
 | `io/captures.py` | Images prises : enregistrement automatique par jour, vignettes, résumés |
 | `ui/gallery.py` | Liste « Images », commune aux espaces Microscope et Analyse |
-| `ui/display_bar.py` | Barre d'affichage de l'espace Analyse : histogramme, contraste, gamma, couleur |
+| `ui/display_bar.py` | Barre d'affichage de l'espace Analyse : image affichée (choisir, fermer), histogramme, contraste, gamma, couleur |
+| `ui/documents.py` | Images ouvertes dans Analyse : chaque image et ses résultats s'ouvrent, s'affichent et se ferment d'un bloc |
 | `ui/panels/analysis_panel.py`, `ui/panels/tool_menu.py` | Panneau « Outils » : menus par tâche, fiche de chaque outil, démarches guidées |
 | `analysis/guide.py` | Mode d'emploi des outils : menus, résumés, « quand l'utiliser », démarches |
 | `ui/compose_panel.py` | Compositions en direct dans la section Acquisition (calcul dans un fil de travail) |

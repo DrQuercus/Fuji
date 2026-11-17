@@ -30,6 +30,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from . import documents
 from .components import button, label, section_title
 from .flow import FlowLayout
 from .theme import ThemeManager, palette
@@ -273,6 +274,10 @@ class DisplayBar(QWidget):
     """Réglages d'affichage de l'image active, toujours sous l'image (espace Analyse)."""
 
     message = Signal(str)
+    #: « Fermer » : fermer l'image affichée
+    close_requested = Signal()
+    #: une autre des images ouvertes est choisie
+    document_chosen = Signal(str)
 
     def __init__(self, viewer: ViewerModel, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -296,7 +301,23 @@ class DisplayBar(QWidget):
         il.setContentsMargins(0, 0, 0, 0)
         il.setSpacing(1)
         il.addWidget(section_title("Image affichée"))
-        il.addWidget(self.name_label)
+        # plusieurs images ouvertes : on choisit celle à afficher
+        self.doc_combo = QComboBox()
+        self.doc_combo.setToolTip("Images ouvertes : choisissez celle à afficher")
+        self.doc_combo.setMinimumWidth(120)
+        self.doc_combo.activated.connect(
+            lambda i: self.document_chosen.emit(self.doc_combo.itemData(i) or "")
+        )
+        self.doc_combo.hide()
+        self.close_btn = button("Fermer", "close", tooltip="Fermer cette image et ses résultats (Ctrl+W)")
+        self.close_btn.setObjectName("ghost")
+        self.close_btn.clicked.connect(self.close_requested.emit)
+        name_row = QHBoxLayout()
+        name_row.setSpacing(4)
+        name_row.addWidget(self.name_label, 1)
+        name_row.addWidget(self.doc_combo, 1)
+        name_row.addWidget(self.close_btn)
+        il.addLayout(name_row)
         il.addWidget(self.info_label)
         info.setMaximumWidth(270)
         lay.addWidget(info)
@@ -398,6 +419,7 @@ class DisplayBar(QWidget):
 
     def _retarget(self, *_: Any) -> None:
         layer = self._target()
+        self._sync_docs()
         if layer is self.layer:
             return
         if self.layer is not None:
@@ -432,8 +454,25 @@ class DisplayBar(QWidget):
         self._refresh_plane()
         self._sync_controls()
 
+    def _sync_docs(self) -> None:
+        """Liste des images ouvertes (montrée quand il y en a plusieurs)."""
+        docs = documents.documents(self.viewer)
+        current = documents.doc_of(self.layer) if self.layer is not None else None
+        self.doc_combo.blockSignals(True)
+        self.doc_combo.clear()
+        for doc in docs:
+            self.doc_combo.addItem(_elide(doc, 34), doc)
+        if current in docs:
+            self.doc_combo.setCurrentIndex(docs.index(current))
+        self.doc_combo.blockSignals(False)
+        several = len(docs) > 1
+        self.doc_combo.setVisible(several)
+        self.name_label.setVisible(not several)
+        self.close_btn.setVisible(bool(self.viewer.layers))
+
     def _sync_info(self, *_: Any) -> None:
         layer = self.layer
+        self._sync_docs()
         if layer is None:
             self.name_label.setText("Aucune image")
             self.info_label.setText("Ouvrez une image (liste à gauche)")
