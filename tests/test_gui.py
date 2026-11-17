@@ -68,7 +68,10 @@ def test_sections_and_expert_mode(window):
 
     for key, *_ in SECTIONS:
         window.sidebar.select(key)
-        assert window.stack.currentWidget() is window._pages[key]
+        if key == "control":  # toujours ouvert, dans le panneau de gauche
+            assert not window.left.isHidden() and window.left_stack.currentWidget() is window._left_pages[key]
+        else:
+            assert window.stack.currentWidget() is window._pages[key]
     window.sidebar._clicked(window.sidebar.current())  # recliquer : replie le panneau
     assert not window.side.isVisible() or window.side.isHidden()
     window.set_expert(True)
@@ -616,12 +619,25 @@ def test_microscope_and_analysis_spaces_stay_apart(window, qtbot):
     window.sidebar.select("analysis")
     window.analysis.set_tool("shapes", "add_rectangle")
     roi = window.viewer.layers["ROI"]
-    window.sidebar.select("images")  # changer de section relâche l'outil de dessin
+    # la liste des images reste ouverte à gauche, en même temps que les outils
+    shown = window.centralWidget()  # (la fenêtre de test n'est pas affichée à l'écran)
+    assert window.gallery.isVisibleTo(shown) and window.analysis.isVisibleTo(shown)
+    window.sidebar.select("images")  # elle est déjà là : rien ne change, l'outil reste actif
+    assert window._section == "analysis" and roi.mode == "add_rectangle"
+    window.sidebar.select("layers")  # changer de section à droite relâche l'outil de dessin
     assert roi.mode == "pan_zoom"
 
     window.set_mode("microscope")
     qtbot.waitUntil(lambda: window.live.running, timeout=5000)  # le live reprend au retour
-    assert window._section == "control"
+    assert window._section == "acquisition"
+    # le contrôle du microscope reste ouvert à gauche, avec n'importe quelle section à droite
+    for key in ("assistants", "acquisition", "images", "config"):
+        window.sidebar.select(key)
+        assert window.control.isVisibleTo(shown) and window.stack.currentWidget() is window._pages[key]
+    window.sidebar._clicked("control")  # son bouton le replie… et le rouvre
+    assert window.left.isHidden() and window._section == "config"
+    window.sidebar._clicked("control")
+    assert window.control.isVisibleTo(shown)
     window.sidebar.select("layers")  # une section de l'autre espace y emmène
     assert window.mode == "analyse"
     window._toggle_live()  # Ctrl+L depuis Analyse : retour au microscope, live allumé
@@ -694,17 +710,30 @@ def test_window_fits_a_small_laptop_screen(qtbot, tmp_path):
     _, win = create_window(str(path))
     qtbot.addWidget(win)
     win.show()
-    for mode in ("microscope", "analyse"):
-        win.set_mode(mode)
+
+    def shrink() -> None:
         for _ in range(3):  # comme quand on rétrécit la fenêtre à la souris : la barre se compacte
             win.resize(600, 500)
             qtbot.wait(50)
-        # la largeur exacte dépend des polices du système (Mac ≈ 750, Linux ≈ 770)
-        assert win.width() <= 820 and win.height() <= 700, (mode, win.size())
+
+    for mode in ("microscope", "analyse"):
+        win.set_mode(mode)
+        shrink()  # panneau de gauche ouvert (contrôle, ou liste des images)
+        # la largeur exacte dépend des polices du système
+        assert win.width() <= 1100 and win.height() <= 700, (mode, win.size())
+        win.toggle_left_panel()  # replié : de la place pour un très petit écran
+        shrink()
+        assert win.width() <= 840, (mode, win.size())
+        win.toggle_left_panel()
     win.set_mode("microscope")
-    win.resize(1024, 640)
-    qtbot.waitUntil(lambda: win.width() <= 1024, timeout=3000)
-    assert win.quickbar.height() < 200  # la barre rapide passe sur deux lignes, sans exploser
+    win.resize(1280, 800)
+    qtbot.waitUntil(lambda: win.width() <= 1280, timeout=3000)
+    qtbot.wait(50)
+    # contrôle ouvert à gauche : sous l'image, seulement l'histogramme (pas de réglages en double)
+    assert win.quickbar.height() < 110 and win.canvas_stack.width() > 450
+    win.toggle_left_panel()  # contrôle replié : la barre rapide reprend tous ses réglages
+    qtbot.wait(50)
+    assert win.quickbar.exposure.isVisibleTo(win.quickbar) and win.quickbar.height() < 200
 
 
 def test_live_compositions_by_hand_from_the_acquisition_section(window, qtbot):

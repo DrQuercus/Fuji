@@ -109,7 +109,7 @@ class GalleryPanel(QWidget):
         show.clicked.connect(self.show_folder)
         change = button("Changer…", tooltip="Choisir où enregistrer les images prises")
         change.clicked.connect(self.change_folder)
-        other = button("Ouvrir un fichier…", "open", tooltip="Ouvrir une autre image dans Analyse (Ctrl+O)")
+        other = button("Ouvrir…", "open", tooltip="Ouvrir une autre image (fichier) dans Analyse (Ctrl+O)")
         other.clicked.connect(self.open_file_requested.emit)
         lay.addWidget(self.folder)
         lay.addWidget(hbox(show, change, other))

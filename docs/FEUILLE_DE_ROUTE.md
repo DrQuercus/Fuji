@@ -120,6 +120,18 @@ après ce premier essai :
 - [x] Sur macOS, les tests et l'essai automatique ne touchent plus aux préférences de
       l'utilisateur (elles étaient partagées)
 
+## Version 0.7 (fait) — panneaux toujours ouverts
+
+- [x] Espace Microscope : le **Contrôle** reste ouvert à gauche de l'image, utilisable en
+      même temps que les Assistants, l'Acquisition ou la liste des Images (à droite)
+- [x] Espace Analyse : la **liste des Images** reste ouverte à gauche, à côté des outils et
+      des calques
+- [x] Chaque panneau se replie (bouton dans la barre de gauche, Ctrl+Shift+B / Ctrl+B) ;
+      Contrôle ouvert, la barre sous l'image ne montre plus que l'histogramme (pas de
+      réglages en double)
+- [x] Panneau de contrôle plus étroit (lampes, objectif et canal réorganisés) ; outils de
+      dessin des ROI qui passent à la ligne
+
 ## Prochaines étapes
 
 ### 1. Valider sur ton matériel (priorité)

@@ -49,6 +49,7 @@ from fuji.analysis.imagej import open_in_fiji
 from fuji.analysis.registry import Operation, combine_planes
 
 from ..components import icon_button
+from ..flow import FlowLayout
 from ..widgets import hint_label
 
 _NONE = "(aucune)"
@@ -196,18 +197,22 @@ class AnalysisPanel(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(6, 6, 6, 6)
 
-        # outils de dessin des ROI (ils agissent sur un calque de formes ou de points)
-        tools = QHBoxLayout()
-        tools.setSpacing(2)
+        # outils de dessin des ROI (ils agissent sur un calque de formes ou de points) ; la
+        # rangée passe à la ligne si le panneau est étroit
+        tools_box = QWidget()
+        tools = FlowLayout(tools_box, spacing=2, line_spacing=2)
+        tools.setContentsMargins(0, 0, 0, 0)
         for icon_name, tip, kind, mode in _TOOLS:
             b = icon_button(icon_name, tip)
             b.clicked.connect(lambda _=False, k=kind, m=mode: self.set_tool(k, m))
             tools.addWidget(b)
-        tools.addStretch(1)
         clear = icon_button("trash", "Effacer toutes les ROI et tous les points")
         clear.clicked.connect(self.clear_rois)
         tools.addWidget(clear)
-        lay.addLayout(tools)
+        policy = tools_box.sizePolicy()
+        policy.setHeightForWidth(True)
+        tools_box.setSizePolicy(policy)
+        lay.addWidget(tools_box)
 
         self.search = QLineEdit()
         self.search.setPlaceholderText("Rechercher (ex. seuil, flou, profil, Threshold, Z Project)")

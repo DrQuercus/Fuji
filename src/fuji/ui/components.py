@@ -107,8 +107,13 @@ class PanelHeader(QWidget):
         self.title = label(title, "PanelTitle", wrap=False)
         self.subtitle = label(subtitle, "PanelSubtitle")
         lay.addWidget(self.title)
-        if subtitle:
-            lay.addWidget(self.subtitle)
+        lay.addWidget(self.subtitle)
+        self.subtitle.setVisible(bool(subtitle))
+
+    def set_text(self, title: str, subtitle: str = "") -> None:
+        self.title.setText(title)
+        self.subtitle.setText(subtitle)
+        self.subtitle.setVisible(bool(subtitle))
 
 
 def hbox(*widgets: QWidget | None, spacing: int = 8, stretch: bool = True, margins: int = 0) -> QWidget:

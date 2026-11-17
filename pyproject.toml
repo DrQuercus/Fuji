@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fuji-microscopy"
-version = "0.6.0"
+version = "0.7.0"
 description = "Logiciel de microscopie : acquisition multi-microscopes, assistants d'alignement et analyse d'images (napari + Micro-Manager + Fiji)."
 readme = "README.md"
 requires-python = ">=3.10"

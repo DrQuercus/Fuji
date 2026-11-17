@@ -4,7 +4,7 @@ Logiciel de microscopie qui réunit le meilleur de **Micro-Manager** (piloter le
 matériel), **napari** (afficher les images) et **Fiji/ImageJ** (analyser), dans une
 interface propre qui s'adapte au microscope.
 
-> Projet en développement (version 0.6). Voir
+> Projet en développement (version 0.7). Voir
 > [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) et [docs/FEUILLE_DE_ROUTE.md](docs/FEUILLE_DE_ROUTE.md).
 
 ![Interface de Fuji : espace Microscope, live sur le microscope simulé](docs/interface.png)
@@ -14,20 +14,27 @@ interface propre qui s'adapte au microscope.
 Deux **espaces de travail**, choisis en haut de la fenêtre, chacun avec sa propre vue
 d'image pour ne pas mélanger prise de vue et analyse :
 
-- **Microscope** : live, réglages (Contrôle), Assistants, Acquisition, Images prises,
-  configuration du microscope. La **barre rapide** sous l'image donne l'exposition, le
-  gain, l'objectif, le canal et l'**histogramme en direct** (alerte de saturation).
-- **Analyse** : les images qu'on y ouvre, les **outils** (ROI, opérations, mesures),
-  les calques et les résultats. Le live s'y met en pause et reprend au retour.
+- **Microscope** : le panneau **Contrôle** (caméra, objectif, éclairage, platine, mise
+  au point) reste ouvert à gauche de l'image pendant qu'on se sert, à droite, des
+  Assistants, de l'Acquisition, de la liste des Images ou de la configuration. Sous
+  l'image, l'**histogramme en direct** (alerte de saturation).
+- **Analyse** : la liste des **Images** reste ouverte à gauche ; à droite, les **outils**
+  (ROI, opérations, mesures) et les calques ; en bas, les résultats. Le live s'y met en
+  pause et reprend au retour.
+
+Chaque panneau se replie : bouton de sa section dans la barre de gauche (Contrôle,
+Images), ou Ctrl+Shift+B à gauche et Ctrl+B à droite. Contrôle replié, la barre sous
+l'image reprend exposition, gain, objectif et canal.
 
 Chaque capture (bouton **Capturer**, Ctrl+K) est **enregistrée automatiquement** dans
 `~/Fuji/Captures/<date>` et rejoint la liste **Images**, commune aux deux espaces : un
 double-clic l'ouvre dans Analyse. On peut y renommer ou supprimer les images.
 
-![Liste des images prises](docs/images-prises.png)
+![Espace Analyse : la liste des images reste ouverte à côté des outils](docs/images-prises.png)
 
-La fenêtre tient sur un petit écran : la barre rapide passe sur deux lignes et la barre
-du haut se compacte (largeur minimale ≈ 750 pixels). Thèmes sombre ou clair, 7 couleurs
+La fenêtre tient sur un portable : environ 1050 pixels de large au minimum avec les deux
+panneaux, 750 en repliant celui de gauche (la barre du haut se compacte, la barre sous
+l'image passe à la ligne). Thèmes sombre ou clair, 7 couleurs
 d'accent, 3 tailles de texte. Raccourcis : Ctrl+1 Microscope, Ctrl+2 Analyse, Ctrl+3
 Images, Ctrl+L live, Ctrl+K capture, Ctrl+B replier le panneau.
 

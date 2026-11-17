@@ -46,6 +46,8 @@ class QuickBar(QWidget):
         self.setSizePolicy(policy)
         self.m = microscope
         lay = FlowLayout(self, spacing=16, line_spacing=8)
+        #: réglages qui doublent le panneau « Contrôle » (masqués quand il est ouvert)
+        self._settings_groups: list[QWidget] = []
         lay.setContentsMargins(14, 8, 14, 8)
         cam = microscope.camera
         caps = microscope.capabilities()
@@ -72,7 +74,7 @@ class QuickBar(QWidget):
             row.addWidget(self.exp_slider, 1)
             row.addWidget(self.exposure)
             row.addWidget(auto)
-            lay.addWidget(_group("Exposition", row), stretch=3)
+            self._add_setting(lay, _group("Exposition", row), stretch=3)
             if caps["gain"]:
                 glo, ghi = cam.gain_limits()
                 self.gain = QDoubleSpinBox()
@@ -82,7 +84,7 @@ class QuickBar(QWidget):
                 self.gain.setKeyboardTracking(False)
                 self.gain.setFixedWidth(88)
                 self.gain.valueChanged.connect(lambda v: cam.set_gain(v))
-                lay.addWidget(_group("Gain", self.gain))
+                self._add_setting(lay, _group("Gain", self.gain))
 
         # objectif
         changer = microscope.objective_changer
@@ -99,13 +101,13 @@ class QuickBar(QWidget):
             self.objectives = choice(list(short.values()), max_buttons=6)
             self.objectives.set_options(list(short.values()), {v: k for k, v in short.items()})
             self.objectives.selected.connect(self._objective_clicked)
-            lay.addWidget(_group(title, self.objectives))
+            self._add_setting(lay, _group(title, self.objectives))
 
         # canal
         if microscope.channel_names:
             self.channels = choice(microscope.channel_names, max_buttons=4)
             self.channels.selected.connect(self._channel_clicked)
-            lay.addWidget(_group("Canal", self.channels))
+            self._add_setting(lay, _group("Canal", self.channels))
 
         if caps["xy_motorized"] or caps["focus_motorized"]:
             stop = button("Stop", "stop", tooltip="Arrêt d'urgence : interrompt tous les moteurs")
@@ -123,6 +125,17 @@ class QuickBar(QWidget):
         self._timer.timeout.connect(self.refresh)
         self._timer.start()
         self.refresh()
+
+    def _add_setting(self, lay: FlowLayout, group: QWidget, stretch: int = 0) -> None:
+        lay.addWidget(group, stretch=stretch)
+        self._settings_groups.append(group)
+
+    def set_compact(self, compact: bool) -> None:
+        """Seulement l'histogramme (et l'arrêt des moteurs) : quand le panneau « Contrôle »
+        est ouvert, il donne déjà exposition, gain, objectif et canal, et l'image a plus de place."""
+        for group in self._settings_groups:
+            group.setVisible(not compact)
+        self.updateGeometry()
 
     def shutdown(self) -> None:
         """Arrête le rafraîchissement avant la déconnexion du microscope."""

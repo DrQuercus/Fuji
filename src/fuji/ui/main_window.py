@@ -54,8 +54,8 @@ from fuji.core.microscope import Microscope
 from fuji.core.profile import MicroscopeProfile, available_profiles
 from fuji.io import save_image
 
-from .chrome import SECTIONS, Sidebar, TopBar, mode_of, sections_of
-from .components import PanelHeader
+from .chrome import PINNED, SECTIONS, Sidebar, TopBar, mode_of, sections_of
+from .components import PanelHeader, icon_button
 from .compose_panel import ComposePanel
 from .config.editor import ConfigEditor
 from .config.wizard import NewMicroscopeDialog
@@ -91,8 +91,8 @@ TITLES.update(
     analysis="Outils d'analyse",
     images="Images prises",
 )
-#: section affichée en entrant dans un espace pour la première fois
-DEFAULT_SECTION = {"microscope": "control", "analyse": "analysis"}
+#: section du panneau de droite affichée en entrant dans un espace pour la première fois
+DEFAULT_SECTION = {"microscope": "acquisition", "analyse": "analysis"}
 
 #: Au-delà de cette taille, un TIFF est lu à la demande au lieu d'être chargé en mémoire.
 _MEMMAP_BYTES = 1 << 30
@@ -197,6 +197,30 @@ class MainWindow(QMainWindow):
         self.canvas_layout = pages[0]  # la barre rapide s'y ajoute (espace Microscope)
         self.quickbar: QuickBar | None = None
 
+        # panneau de gauche : toujours ouvert (Contrôle, ou Images en analyse)
+        self.left = QWidget()
+        self.left.setObjectName("SidePanel")
+        self.left.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.left.setMinimumWidth(280)
+        left_lay = QVBoxLayout(self.left)
+        left_lay.setContentsMargins(14, 16, 12, 12)
+        left_lay.setSpacing(8)
+        left_head = QHBoxLayout()
+        self.left_header = PanelHeader("", "")
+        fold = icon_button("left", "Replier ce panneau (le rouvrir : son bouton dans la barre de gauche)")
+        fold.clicked.connect(self.toggle_left_panel)
+        left_head.addWidget(self.left_header, 1)
+        left_head.addWidget(fold, 0, Qt.AlignmentFlag.AlignTop)
+        left_lay.addLayout(left_head)
+        self.left_stack = QStackedWidget()
+        self._left_pages: dict[str, QWidget] = {}
+        for key in PINNED.values():
+            holder = QWidget()
+            QVBoxLayout(holder).setContentsMargins(0, 0, 0, 0)
+            self._left_pages[key] = holder
+            self.left_stack.addWidget(holder)
+        left_lay.addWidget(self.left_stack, 1)
+
         self.side = QWidget()
         self.side.setObjectName("SidePanel")
         self.side.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -215,10 +239,13 @@ class MainWindow(QMainWindow):
         body.addWidget(self.sidebar)
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setChildrenCollapsible(False)
+        self.splitter.addWidget(self.left)
         self.splitter.addWidget(self.canvas_stack)
         self.splitter.addWidget(self.side)
-        self.splitter.setStretchFactor(0, 1)
-        self.splitter.setSizes([1100, 420])
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setStretchFactor(2, 0)
+        self.splitter.setSizes([340, 840, 380])
         body.addWidget(self.splitter, 1)
         root.addLayout(body, 1)
         self.setCentralWidget(central)
@@ -268,6 +295,7 @@ class MainWindow(QMainWindow):
         # signaux du cadre -------------------------------------------------------
         self.sidebar.selected.connect(self.show_section)
         self.sidebar.collapse_requested.connect(self.toggle_side_panel)
+        self.sidebar.pin_toggled.connect(lambda _key: self.toggle_left_panel())
         self.topbar.live_toggled.connect(self._live_toggled)
         self.topbar.capture_clicked.connect(self.snap)
         self.topbar.expert_toggled.connect(self.set_expert)
@@ -311,6 +339,8 @@ class MainWindow(QMainWindow):
         self._props_index = control_tabs.addTab(self.properties, "Toutes les propriétés")
         self.control_tabs = control_tabs
         self._set_page("control", control_tabs)
+        # le panneau de gauche est assez large pour tout le contrôle de ce microscope
+        self.left.setMinimumWidth(max(300, min(440, self.control.minimumSizeHint().width() + 44)))
 
         self.assistants = AssistantsPanel(scope, self.scope_viewer, self.live)
         self._set_page("assistants", _scroll(self.assistants))
@@ -346,6 +376,7 @@ class MainWindow(QMainWindow):
         self.quickbar = QuickBar(scope)
         self.quickbar.message.connect(self.notify)
         self.canvas_layout.addWidget(self.quickbar)
+        self.quickbar.set_compact(self.settings.value("left/microscope", True, type=bool))
 
         scope.objective_changed.connect(self._emit_optics_changed)
         scope.channel_changed.connect(self._emit_optics_changed)
@@ -397,7 +428,8 @@ class MainWindow(QMainWindow):
             self.m.disconnect()
 
     def _set_page(self, key: str, widget: QWidget) -> None:
-        holder = self._pages[key]
+        # « Contrôle » vit dans le panneau de gauche ; « Images » y passe en analyse (voir set_mode)
+        holder = self._left_pages[key] if key == "control" else self._pages[key]
         lay = holder.layout()
         while lay.count():
             item = lay.takeAt(0)
@@ -557,6 +589,7 @@ class MainWindow(QMainWindow):
             self.canvas_stack.setCurrentIndex(0 if mode == "microscope" else 1)
             self.sidebar.set_mode(mode)
             self.topbar.set_mode(mode)
+            self._show_pinned(mode)
             self.settings.setValue("mode", mode)
             if mode == "microscope" and self._live_paused:
                 self._live_paused = False
@@ -565,7 +598,37 @@ class MainWindow(QMainWindow):
         wanted = section or str(self.settings.value(f"section/{mode}", DEFAULT_SECTION[mode]))
         if wanted not in sections_of(mode):
             wanted = DEFAULT_SECTION[mode]
+        if wanted == PINNED[mode]:  # déjà à gauche : à droite, la section habituelle
+            self._set_left_visible(True)
+            remembered = str(self.settings.value(f"section/{mode}", DEFAULT_SECTION[mode]))
+            wanted = (
+                remembered
+                if remembered in sections_of(mode) and remembered != wanted
+                else DEFAULT_SECTION[mode]
+            )
         self.sidebar.select(wanted)
+
+    def _show_pinned(self, mode: str) -> None:
+        """Panneau de gauche de l'espace ``mode`` : Contrôle, ou la liste des images (la même
+        liste que la section « Images » de l'espace Microscope, déplacée ici)."""
+        key = PINNED[mode]
+        target = self._left_pages["images"] if mode == "analyse" else self._pages["images"]
+        if self.gallery.parentWidget() is not target:
+            target.layout().addWidget(self.gallery)
+        self.left_stack.setCurrentWidget(self._left_pages[key])
+        self.left_header.set_text(TITLES.get(key, key), SUBTITLES.get(key, ""))
+        self._set_left_visible(self.settings.value(f"left/{mode}", True, type=bool))
+
+    def _set_left_visible(self, on: bool) -> None:
+        self.left.setVisible(on)
+        self.sidebar.set_pin_checked(on)
+        if self._mode is not None:
+            self.settings.setValue(f"left/{self._mode}", on)
+        if self.mode == "microscope" and self.quickbar is not None:
+            self.quickbar.set_compact(on)  # pas de réglages en double sous l'image
+
+    def toggle_left_panel(self) -> None:
+        self._set_left_visible(self.left.isHidden())
 
     @property
     def mode(self) -> str:
@@ -579,13 +642,15 @@ class MainWindow(QMainWindow):
         if mode != self._mode:
             self.set_mode(mode, key)
             return
+        if key == PINNED[mode]:  # toujours ouverte, à gauche : on la montre simplement
+            self._set_left_visible(True)
+            return
         if self._section == "analysis" and key != "analysis":
             self.analysis.leave()  # les outils de dessin ne restent pas actifs ailleurs
         self._section = key
         self.side.setVisible(True)
         self.stack.setCurrentWidget(self._pages[key])
-        self.panel_header.title.setText(TITLES.get(key, key))
-        self.panel_header.subtitle.setText(SUBTITLES.get(key, ""))
+        self.panel_header.set_text(TITLES.get(key, key), SUBTITLES.get(key, ""))
         self.settings.setValue(f"section/{mode}", key)
 
     def toggle_side_panel(self) -> None:
@@ -669,7 +734,12 @@ class MainWindow(QMainWindow):
         m_view.addSeparator()
         self.expert_action = self._action("Mode expert", self.set_expert, checkable=True)
         m_view.addAction(self.expert_action)
-        m_view.addAction(self._action("Replier / déplier le panneau", self.toggle_side_panel, "Ctrl+B"))
+        m_view.addAction(
+            self._action("Replier / déplier le panneau de droite", self.toggle_side_panel, "Ctrl+B")
+        )
+        m_view.addAction(
+            self._action("Replier / déplier le panneau de gauche", self.toggle_left_panel, "Ctrl+Shift+B")
+        )
         m_view.addAction(self._action("Thème clair / sombre", ThemeManager.get().toggle_mode, "Ctrl+Shift+T"))
         m_view.addAction(
             self._action("Recentrer l'image", lambda: self.current_viewer().reset_view(), "Ctrl+R")

@@ -38,6 +38,11 @@ SECTIONS = (
 )
 
 
+#: Section toujours ouverte dans chaque espace, dans le panneau à gauche de l'image : les
+#: réglages du microscope pendant qu'on fait autre chose, la liste des images pendant l'analyse.
+PINNED = {"microscope": "control", "analyse": "images"}
+
+
 def sections_of(mode: str) -> list[str]:
     return [key for key, *_rest, modes in SECTIONS if mode in modes]
 
@@ -49,10 +54,12 @@ def mode_of(key: str, current: str) -> str:
 
 
 class Sidebar(QWidget):
-    """Barre de navigation à icônes. Recliquer la section active replie le panneau."""
+    """Barre de navigation à icônes. Recliquer la section active replie le panneau de droite ;
+    le bouton de la section toujours ouverte (en tête) montre ou cache le panneau de gauche."""
 
     selected = Signal(str)
     collapse_requested = Signal()
+    pin_toggled = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -78,12 +85,30 @@ class Sidebar(QWidget):
             self.buttons[key] = b
             lay.addWidget(b, 0, Qt.AlignmentFlag.AlignHCenter)
         self._current: str | None = None
+        self._pinned: str | None = None
         ThemeManager.get().changed.connect(self._retheme)
 
     def set_mode(self, mode: str) -> None:
-        """N'affiche que les sections de l'espace ``mode``."""
-        for b in self.buttons.values():
+        """N'affiche que les sections de l'espace ``mode`` ; sa section toujours ouverte n'est
+        plus un choix exclusif mais un interrupteur (panneau de gauche visible ou non)."""
+        self._pinned = PINNED.get(mode)
+        if self._current == self._pinned:
+            self._current = None
+        for key, b in self.buttons.items():
             b.setVisible(mode in b.property("modes"))
+            in_group = self._group.id(b) != -1
+            if key == self._pinned and in_group:
+                self._group.removeButton(b)
+            elif key != self._pinned and not in_group:
+                self._group.addButton(b)
+                b.setChecked(False)
+
+    def set_pin_checked(self, on: bool) -> None:
+        if self._pinned is not None:
+            b = self.buttons[self._pinned]
+            b.blockSignals(True)
+            b.setChecked(on)
+            b.blockSignals(False)
 
     def set_badge(self, key: str, text: str) -> None:
         """Petit compteur sous le nom d'une section (ex. nombre d'images prises)."""
@@ -92,13 +117,17 @@ class Sidebar(QWidget):
         b.setText(f"{base} {text}".strip())
 
     def _clicked(self, key: str) -> None:
+        if key == self._pinned:
+            self.pin_toggled.emit(key)
+            return
         if key == self._current:
             self.collapse_requested.emit()
             return
         self.select(key)
 
     def select(self, key: str) -> None:
-        self._current = key
+        if key != self._pinned:
+            self._current = key
         self.buttons[key].setChecked(True)
         self.selected.emit(key)
 

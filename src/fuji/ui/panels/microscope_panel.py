@@ -30,6 +30,13 @@ from fuji.core.microscope import Microscope
 from ..widgets import hint_label, row, section
 
 
+def _compact_combo(combo: QComboBox, chars: int) -> None:
+    """Liste déroulante qui peut rétrécir (le panneau de contrôle reste étroit) : les noms
+    longs sont abrégés dans la case, complets dans la liste."""
+    combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+    combo.setMinimumContentsLength(chars)
+
+
 class MicroscopePanel(QWidget):
     message = Signal(str)
 
@@ -110,7 +117,8 @@ class MicroscopePanel(QWidget):
             grid.addWidget(self.gain, 2, 1)
         lay.addLayout(grid)
         if caps["auto_white_balance"]:
-            wb = QPushButton("Balance des blancs (sur une zone vide)")
+            wb = QPushButton("Balance des blancs")
+            wb.setToolTip("Sur une zone vide de la lame : le fond devient neutre")
             wb.clicked.connect(self._white_balance)
             lay.addWidget(wb)
         self._sync_slider()
@@ -157,8 +165,13 @@ class MicroscopePanel(QWidget):
             self.objective.addItems(m.objective_changer.labels)
             self.objective.setCurrentText(m.objective_changer.get_label())
             self.objective.currentTextChanged.connect(self._on_objective)
-            label = "Objectif" + (" (indiquer)" if m.objective_changer.manual else "")
-            grid.addWidget(QLabel(label), r, 0)
+            _compact_combo(self.objective, 10)
+            label = QLabel("Objectif")
+            if m.objective_changer.manual:
+                tip = "Tourelle manuelle : indiquez ici l'objectif que vous avez mis en place"
+                label.setToolTip(tip)
+                self.objective.setToolTip(tip)
+            grid.addWidget(label, r, 0)
             grid.addWidget(self.objective, r, 1)
             r += 1
         self.pixel_label = QLabel()
@@ -168,10 +181,11 @@ class MicroscopePanel(QWidget):
         if m.profile.channels:
             self.channel = QComboBox()
             self.channel.addItems(m.channel_names)
+            _compact_combo(self.channel, 8)
             if m.channel:
                 self.channel.setCurrentText(m.channel)
-            apply = QPushButton("Appliquer")
-            apply.setToolTip("Règle cubes, lampes et exposition pour ce canal")
+            apply = QPushButton("OK")
+            apply.setToolTip("Appliquer ce canal : règle cubes, lampes et exposition")
             apply.clicked.connect(lambda: self._apply_channel(self.channel.currentText()))
             grid.addWidget(QLabel("Canal"), r, 0)
             grid.addWidget(row(self.channel, apply, stretch_last=False), r, 1)
@@ -202,17 +216,16 @@ class MicroscopePanel(QWidget):
             cb.setChecked(light.is_on())
             cb.toggled.connect(lambda on, d=light: self._set_light(d, on=on))
             slider = None
-            widgets: list[QWidget] = [cb]
-            if light.supports_intensity:
+            lay.addWidget(cb)
+            if light.supports_intensity:  # intensité sous le nom : le panneau reste étroit
                 slider = QSlider(Qt.Orientation.Horizontal)
                 slider.setRange(0, 100)
                 slider.setValue(int(light.get_intensity()))
-                slider.setFixedWidth(110)
+                slider.setMinimumWidth(80)
                 slider.sliderReleased.connect(
                     lambda d=light, s=slider: self._set_light(d, intensity=s.value())
                 )
-                widgets.append(slider)
-            lay.addWidget(row(*widgets))
+                lay.addWidget(slider)
             self._light_widgets.append((light, cb, slider))
         return box
 
@@ -277,9 +290,12 @@ class MicroscopePanel(QWidget):
         go_home = QPushButton("Aller à 0")
         go_home.clicked.connect(lambda: self.run_motion(stage.move_to, 0.0, 0.0))
         lay.addWidget(row(self._stop_button(), origin, go_home))
-        self.click_to_center = QCheckBox("Double-clic sur l'image : centrer ce point")
+        self.click_to_center = QCheckBox("Double-clic : centrer le point")
         self.click_to_center.setChecked(True)
-        self.click_to_center.setToolTip("Demande l'orientation de la platine (assistant « Platine »)")
+        self.click_to_center.setToolTip(
+            "Double-clic sur l'image : ce point vient au centre du champ. "
+            "Demande l'orientation de la platine (assistant « Platine »)"
+        )
         lay.addWidget(self.click_to_center)
         limits = stage.limits()
         if limits is not None:
