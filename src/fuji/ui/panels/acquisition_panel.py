@@ -11,7 +11,7 @@ import math
 from pathlib import Path
 
 import useq
-from qtpy.QtCore import QSettings, Qt, Signal
+from qtpy.QtCore import Qt, Signal
 from qtpy.QtWidgets import (
     QCheckBox,
     QDoubleSpinBox,
@@ -33,6 +33,7 @@ from fuji.core.acquisition import AcquisitionEngine, AcquisitionSummary, Autofoc
 from fuji.core.microscope import Microscope
 from fuji.io import OMETiffWriter
 
+from ..prefs import settings
 from ..qt_bridge import AcquisitionBridge
 from ..widgets import hint_label, row, section
 
@@ -70,16 +71,16 @@ class AcquisitionPanel(QWidget):
         self._mosaic = None  # plan de la mosaïque en cours d'acquisition
         self._tiles: dict[int, dict[int, object]] = {}
         caps = microscope.capabilities()
-        settings = QSettings("Fuji", "Fuji")
+        prefs = settings()
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(6, 6, 6, 6)
 
         # destination
         box, blay = section("Enregistrement")
-        self.name = QLineEdit(settings.value("acq/name", "acquisition"))
+        self.name = QLineEdit(prefs.value("acq/name", "acquisition"))
         default_dir = microscope.profile.save_directory or str(Path.home() / "Fuji" / "acquisitions")
-        self.folder = QLineEdit(settings.value("acq/folder", default_dir))
+        self.folder = QLineEdit(prefs.value("acq/folder", default_dir))
         browse = QPushButton("…")
         browse.setFixedWidth(30)
         browse.clicked.connect(self._browse)
@@ -127,7 +128,11 @@ class AcquisitionPanel(QWidget):
             blay.addWidget(hint_label("Pas de mise au point déclarée dans ce profil."))
         elif not caps["focus_motorized"]:
             blay.addWidget(
-                hint_label("Mise au point manuelle : Fuji indiquera de combien tourner la vis à chaque plan.")
+                hint_label(
+                    "Mise au point manuelle : pour une image nette partout, utilisez plutôt « Profondeur "
+                    "de champ étendue » ci-dessus. Ici, Fuji indique de combien tourner la vis à chaque "
+                    "plan (pile Z pour mesurer en 3D)."
+                )
             )
         self._z_nyquist = hint_label()
         blay.addWidget(self._z_nyquist)
@@ -343,9 +348,9 @@ class AcquisitionPanel(QWidget):
             )
             if answer != QMessageBox.StandardButton.Yes:
                 return
-        settings = QSettings("Fuji", "Fuji")
-        settings.setValue("acq/name", self.name.text())
-        settings.setValue("acq/folder", self.folder.text())
+        prefs = settings()
+        prefs.setValue("acq/name", self.name.text())
+        prefs.setValue("acq/folder", self.folder.text())
         try:
             writer = OMETiffWriter(self.folder.text(), self.name.text())
         except Exception as exc:  # dossier protégé, disque absent, nom invalide...

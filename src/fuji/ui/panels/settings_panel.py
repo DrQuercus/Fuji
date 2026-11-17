@@ -21,6 +21,7 @@ from superqt.utils import create_worker
 from fuji import __version__
 
 from ..components import Card, PathEdit, Segmented, ToggleSwitch, button, hbox, hint, label
+from ..prefs import settings
 from ..theme import ACCENTS, FONT_SIZES, ThemeManager
 
 
@@ -35,7 +36,7 @@ class SettingsPanel(QWidget):
         super().__init__(parent)
         tm = ThemeManager.get()
         mode, accent, size = tm.settings()
-        s = QSettings("Fuji", "Fuji")
+        s = settings()
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(12)
@@ -183,11 +184,11 @@ class SettingsPanel(QWidget):
 
     def _ai_toggled(self, on: bool) -> None:
         self.ai_port.setEnabled(not on)
-        QSettings("Fuji", "Fuji").setValue("ia/port", self.ai_port.value())
+        settings().setValue("ia/port", self.ai_port.value())
         self.ai_server_requested.emit(on, self.ai_port.value(), self.ai_hardware.isChecked())
 
     def _ai_hardware_toggled(self, on: bool) -> None:
-        QSettings("Fuji", "Fuji").setValue("ia/hardware", on)
+        settings().setValue("ia/hardware", on)
         if self.ai_enabled.isChecked():  # applique tout de suite le nouveau réglage
             self.ai_server_requested.emit(True, self.ai_port.value(), on)
 
@@ -218,11 +219,11 @@ class SettingsPanel(QWidget):
         ThemeManager.get().set(accent=name)
 
     def _auto_contrast(self, on: bool) -> None:
-        QSettings("Fuji", "Fuji").setValue("live/auto_contrast", on)
+        settings().setValue("live/auto_contrast", on)
         self.auto_contrast_changed.emit(on)
 
     def _set_fiji(self, path: str) -> None:
-        QSettings("Fuji", "Fuji").setValue("fiji/path", path)
+        settings().setValue("fiji/path", path)
         if path:
             os.environ["FUJI_FIJI_PATH"] = path
 

@@ -11,9 +11,11 @@ import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from qtpy.QtCore import QObject, QSettings, Signal
+from qtpy.QtCore import QObject, Signal
 from qtpy.QtGui import QColor, QFont
 from qtpy.QtWidgets import QApplication
+
+from .prefs import settings
 
 ACCENTS: dict[str, str] = {
     "Bleu": "#4f8cff",
@@ -123,7 +125,7 @@ class ThemeManager(QObject):
 
     def __init__(self) -> None:
         super().__init__()
-        s = QSettings("Fuji", "Fuji")
+        s = settings()
         mode = s.value("theme/mode", "sombre")
         accent = s.value("theme/accent", "Bleu")
         size = s.value("theme/font", "Normal")
@@ -145,7 +147,7 @@ class ThemeManager(QObject):
         )
 
     def settings(self) -> tuple[str, str, str]:
-        s = QSettings("Fuji", "Fuji")
+        s = settings()
         return (
             s.value("theme/mode", "sombre"),
             s.value("theme/accent", "Bleu"),
@@ -155,7 +157,7 @@ class ThemeManager(QObject):
     def set(self, *, mode: str | None = None, accent: str | None = None, size: str | None = None) -> None:
         cur_mode, cur_accent, cur_size = self.settings()
         mode, accent, size = mode or cur_mode, accent or cur_accent, size or cur_size
-        s = QSettings("Fuji", "Fuji")
+        s = settings()
         s.setValue("theme/mode", mode)
         s.setValue("theme/accent", accent)
         s.setValue("theme/font", size)
@@ -267,6 +269,11 @@ QPushButton#ghost:hover, QToolButton#ghost:hover {{ background: {p.surface3}; }}
 QPushButton#chip {{ border-radius: 13px; padding: 4px 11px; background: {p.surface3}; }}
 QPushButton#chip:checked {{ background: {p.accent}; border-color: {p.accent}; color: {p.accent_text};
                             font-weight: 700; }}
+#ModeSwitch {{ background: {p.surface3}; border: 1px solid {p.border}; border-radius: 17px; }}
+QPushButton#mode {{ background: transparent; border: none; border-radius: 14px; padding: 5px 13px;
+                    color: {p.muted}; font-weight: 600; }}
+QPushButton#mode:hover {{ color: {p.text}; }}
+QPushButton#mode:checked {{ background: {p.accent}; color: {p.accent_text}; font-weight: 700; }}
 QPushButton#live {{ border-radius: 17px; padding: 7px 16px; font-weight: 700; }}
 QPushButton#live:checked {{ background: {p.success}; border-color: {p.success}; color: #04130a; }}
 QPushButton#capture {{ border-radius: 17px; padding: 7px 16px; font-weight: 700;

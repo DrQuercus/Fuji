@@ -6,11 +6,12 @@ import logging
 import sys
 from pathlib import Path
 
-from qtpy.QtCore import QSettings
 from qtpy.QtWidgets import QApplication, QMessageBox
 
 from fuji.core.microscope import Microscope
 from fuji.core.profile import user_profile_dir
+
+from .prefs import settings
 
 log = logging.getLogger(__name__)
 
@@ -54,14 +55,10 @@ def install_error_handler() -> None:
 
 def isolate_settings(folder: str) -> None:
     """Range les réglages de l'interface dans ``folder`` plutôt que dans les préférences de
-    l'utilisateur (tests, essai automatique).
+    l'utilisateur (tests, essai automatique). À appeler avant de créer la fenêtre."""
+    from .prefs import isolate
 
-    Sur macOS, les préférences « natives » ne se déplacent pas (``QSettings.setPath`` y est
-    sans effet) : on passe donc au format ``.ini``, déplaçable sur tous les systèmes. À
-    appeler avant de créer la fenêtre.
-    """
-    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
-    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(folder))
+    isolate(folder)
 
 
 def _connect(name: str) -> Microscope:
@@ -78,8 +75,8 @@ def create_window(profile: str | None = None):  # type: ignore[no-untyped-def]
     app.setApplicationName("Fuji")
     app.setOrganizationName("Fuji")
     _style(app)  # type: ignore[arg-type]
-    settings = QSettings("Fuji", "Fuji")
-    name = profile or settings.value("last_profile", "demo")
+    prefs = settings()
+    name = profile or prefs.value("last_profile", "demo")
     try:
         scope = _connect(name)
     except Exception as exc:
@@ -96,7 +93,7 @@ def create_window(profile: str | None = None):  # type: ignore[no-untyped-def]
             raise
         name = "demo"
         scope = _connect(name)
-    settings.setValue("last_profile", name)
+    prefs.setValue("last_profile", name)
     window = MainWindow(scope)
     return app, window
 

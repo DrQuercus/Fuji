@@ -6,79 +6,88 @@ import math
 
 import numpy as np
 from qtpy.QtCore import Qt, QTimer, Signal
-from qtpy.QtWidgets import QDoubleSpinBox, QHBoxLayout, QSlider, QVBoxLayout, QWidget
+from qtpy.QtWidgets import QDoubleSpinBox, QHBoxLayout, QLayout, QSizePolicy, QSlider, QVBoxLayout, QWidget
 
 from fuji.core.microscope import Microscope
 
-from .components import Segmented, button, label, section_title, separator
+from .components import button, choice, label, section_title
+from .flow import FlowLayout
 from .histogram import HistogramWidget
 
 
+def _group(title: str, content: QWidget | QLayout) -> QWidget:
+    """Un réglage de la barre : son titre au-dessus, la commande en dessous."""
+    box = QWidget()
+    lay = QVBoxLayout(box)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(2)
+    lay.addWidget(section_title(title))
+    if isinstance(content, QLayout):
+        lay.addLayout(content)
+    else:
+        lay.addWidget(content)
+    return box
+
+
 class QuickBar(QWidget):
+    """Réglages de prise de vue toujours à portée de main.
+
+    Les groupes (exposition, gain, objectif, canal, histogramme) se rangent sur une ligne
+    quand la fenêtre est large, et passent à la ligne sur un petit écran."""
+
     message = Signal(str)
 
     def __init__(self, microscope: Microscope, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("QuickBar")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        policy = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
         self.m = microscope
-        lay = QHBoxLayout(self)
+        lay = FlowLayout(self, spacing=16, line_spacing=8)
         lay.setContentsMargins(14, 8, 14, 8)
-        lay.setSpacing(14)
         cam = microscope.camera
         caps = microscope.capabilities()
 
         # exposition
         if cam is not None:
-            box = QVBoxLayout()
-            box.setSpacing(2)
-            box.addWidget(section_title("Exposition"))
             row = QHBoxLayout()
             row.setSpacing(6)
             lo, hi = cam.exposure_limits()
             self._log_lo, self._log_hi = math.log10(max(lo, 0.05)), math.log10(min(hi, 10_000))
             self.exp_slider = QSlider(Qt.Orientation.Horizontal)
             self.exp_slider.setRange(0, 1000)
-            self.exp_slider.setMinimumWidth(130)
+            self.exp_slider.setMinimumWidth(90)
             self.exp_slider.valueChanged.connect(self._slider_changed)
             self.exposure = QDoubleSpinBox()
             self.exposure.setRange(lo, hi)
             self.exposure.setDecimals(1)
             self.exposure.setSuffix(" ms")
             self.exposure.setKeyboardTracking(False)
-            self.exposure.setFixedWidth(100)
+            self.exposure.setFixedWidth(92)
             self.exposure.valueChanged.connect(self._exposure_changed)
             auto = button("Auto", "wand", tooltip="Exposition automatique (70 % de la dynamique)")
             auto.clicked.connect(self.auto_exposure)
             row.addWidget(self.exp_slider, 1)
             row.addWidget(self.exposure)
             row.addWidget(auto)
-            box.addLayout(row)
-            lay.addLayout(box, 3)
+            lay.addWidget(_group("Exposition", row), stretch=3)
             if caps["gain"]:
-                gbox = QVBoxLayout()
-                gbox.setSpacing(2)
-                gbox.addWidget(section_title("Gain"))
                 glo, ghi = cam.gain_limits()
                 self.gain = QDoubleSpinBox()
                 self.gain.setRange(glo, ghi)
                 self.gain.setDecimals(1 if ghi < 100 else 0)
                 self.gain.setSuffix(f" {cam.gain_unit}")
                 self.gain.setKeyboardTracking(False)
-                self.gain.setFixedWidth(92)
+                self.gain.setFixedWidth(88)
                 self.gain.valueChanged.connect(lambda v: cam.set_gain(v))
-                gbox.addWidget(self.gain)
-                lay.addLayout(gbox)
-            lay.addWidget(separator(vertical=True))
+                lay.addWidget(_group("Gain", self.gain))
 
         # objectif
         changer = microscope.objective_changer
         if changer is not None and microscope.profile.objectives:
-            obox = QVBoxLayout()
-            obox.setSpacing(2)
             title = "Objectif" + (" (indiquer)" if changer.manual else "")
-            obox.addWidget(section_title(title))
-            self.objectives = Segmented()
             short = {lbl: lbl.split("/")[0].split(" ")[0] for lbl in changer.labels}
             # deux objectifs de même grossissement (10x/0.25 et 10x/0.30 Ph) : nom complet,
             # sinon l'un des deux boutons serait inutilisable
@@ -87,31 +96,26 @@ class QuickBar(QWidget):
                 counts[text] = counts.get(text, 0) + 1
             short = {lbl: (text if counts[text] == 1 else lbl) for lbl, text in short.items()}
             self._obj_short = short
+            self.objectives = choice(list(short.values()), max_buttons=6)
             self.objectives.set_options(list(short.values()), {v: k for k, v in short.items()})
             self.objectives.selected.connect(self._objective_clicked)
-            obox.addWidget(self.objectives)
-            lay.addLayout(obox, 2)
+            lay.addWidget(_group(title, self.objectives))
 
         # canal
         if microscope.channel_names:
-            cbox = QVBoxLayout()
-            cbox.setSpacing(2)
-            cbox.addWidget(section_title("Canal"))
-            self.channels = Segmented(microscope.channel_names)
+            self.channels = choice(microscope.channel_names, max_buttons=4)
             self.channels.selected.connect(self._channel_clicked)
-            cbox.addWidget(self.channels)
-            lay.addLayout(cbox, 2)
+            lay.addWidget(_group("Canal", self.channels))
 
         if caps["xy_motorized"] or caps["focus_motorized"]:
             stop = button("Stop", "stop", tooltip="Arrêt d'urgence : interrompt tous les moteurs")
             stop.setObjectName("danger")
             stop.clicked.connect(self.stop_motion)
-            lay.addWidget(stop)
-        lay.addWidget(separator(vertical=True))
+            lay.addWidget(_group("Moteurs", stop))
         self.histogram = HistogramWidget()
-        self.histogram.setMinimumWidth(220)
+        self.histogram.setMinimumWidth(180)
         self.histogram.setMaximumWidth(360)
-        lay.addWidget(self.histogram, 2)
+        lay.addWidget(self.histogram, stretch=2)
         self.pixel_label = label("", "hint", wrap=False)
 
         self._timer = QTimer(self)

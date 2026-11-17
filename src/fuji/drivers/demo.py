@@ -146,6 +146,8 @@ class DemoCamera(Camera):
             "lamp_offset_y": 0.0,
             "camera_rotation_deg": 1.5,
             "noise": True,
+            # échantillon épais : la mise au point n'est pas la même partout dans le champ
+            "relief_um": 0.0,
         }
         self._mask_cache: tuple[tuple, np.ndarray] | None = None
         self._register_props()
@@ -214,6 +216,18 @@ class DemoCamera(Camera):
             ),
         )
         prop("noise", PropertyInfo("Bruit", PropertyType.BOOL, category=sim, advanced=True))
+        prop(
+            "relief_um",
+            PropertyInfo(
+                "Épaisseur de l'échantillon",
+                PropertyType.FLOAT,
+                limits=(0, 200),
+                unit="µm",
+                category=sim,
+                description="0 = lame plate. Au-delà, une seule partie du champ est nette à la fois : "
+                "de quoi essayer la profondeur de champ étendue.",
+            ),
+        )
         self._add_property(
             PropertyInfo(
                 "Profondeur de bits",
@@ -389,6 +403,41 @@ class DemoCamera(Camera):
             )
         return out[0], out[1]
 
+    @staticmethod
+    def _blur_with_relief(
+        cyto: np.ndarray, nuc: np.ndarray, dz: float, relief: float, na: float, px_um: float
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Échantillon incliné de ``relief`` µm en diagonale du champ : chaque endroit a sa
+        propre défocalisation. Quelques niveaux de flou, interpolés pixel par pixel."""
+        h, w = cyto.shape
+        yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+        local = np.abs(dz - relief * (0.5 * xx / w + 0.5 * yy / h - 0.5))
+        levels = np.linspace(float(local.min()), float(local.max()) + 1e-3, 5)
+
+        def sigma(level: float) -> float:
+            return min(math.hypot(level * na * 0.5, 0.21 * 0.55 / na) / px_um, 30.0)
+
+        def blur(m: np.ndarray, s: float) -> np.ndarray:
+            if s <= 3.0:
+                return ndi.gaussian_filter(m, s, truncate=3.0)
+            f = int(s // 2)  # gros flou : calculé sur une image réduite, bien plus vite
+            small = ndi.gaussian_filter(m[::f, ::f], s / f, truncate=3.0)
+            big = ndi.zoom(
+                small, (h / small.shape[0], w / small.shape[1]), order=1, grid_mode=True, mode="nearest"
+            )
+            return big[:h, :w]
+
+        out = []
+        for m in (cyto, nuc):
+            stack = np.stack([blur(m, sigma(lv)) for lv in levels])
+            pos = np.interp(local, levels, np.arange(len(levels), dtype=np.float32))
+            i0 = np.clip(pos.astype(np.int64), 0, len(levels) - 2)
+            frac = (pos - i0).astype(np.float32)
+            lo = np.take_along_axis(stack, i0[None], 0)[0]
+            hi = np.take_along_axis(stack, (i0 + 1)[None], 0)[0]
+            out.append(lo * (1 - frac) + hi * frac)
+        return out[0], out[1]
+
     def _render(self) -> np.ndarray:
         shape = self._shape
         px_um, na = self._optics()
@@ -400,6 +449,10 @@ class DemoCamera(Camera):
         # si l'image est floue de toute façon, l'interpolation au plus proche suffit
         order = 0 if (sigma_px >= 1.5 and px_um < WORLD_RES_UM) else 1
         cyto, nuc = self._sample_world(shape, px_um, order)
+        relief = float(self.sim.get("relief_um", 0.0))
+        if relief > 0:  # flou différent selon l'endroit : appliqué ici, une fois pour toutes
+            cyto, nuc = self._blur_with_relief(cyto, nuc, dz, relief, na, px_um)
+            sigma_px = 0.0
 
         maxval = float(2**self._bits - 1)
         k = 0.6 * maxval / 10.0 * self._gain * self._exposure  # ~60 % de la dynamique à 10 ms

@@ -13,6 +13,7 @@ def _isolated_home(tmp_path, monkeypatch):
     """Chaque test a son propre dossier utilisateur (profils, champ plat...) et ses propres
     réglages d'interface : lancer les tests ne touche jamais à l'installation de l'utilisateur."""
     monkeypatch.setenv("FUJI_HOME", str(tmp_path / "fuji-home"))
+    monkeypatch.setenv("FUJI_CAPTURES", str(tmp_path / "captures"))  # jamais dans ~/Fuji
     try:
         from fuji.ui.app import isolate_settings
     except ImportError:  # interface non installée

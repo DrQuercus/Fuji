@@ -10,6 +10,7 @@ from qtpy.QtGui import QColor, QPainter
 from qtpy.QtWidgets import (
     QAbstractButton,
     QButtonGroup,
+    QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -243,6 +244,44 @@ class Segmented(QWidget):
 
     def options(self) -> list[str]:
         return [b.property("value") for b in self._group.buttons()]
+
+
+class ChoiceCombo(QComboBox):
+    """Même usage que :class:`Segmented`, sous forme de liste déroulante : pour les longues
+    listes (beaucoup de canaux), qui prendraient trop de place en boutons."""
+
+    selected = Signal(str)
+
+    def __init__(self, options: Sequence[str] = (), parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.activated.connect(lambda i: self.selected.emit(self.itemText(i)))
+        self.set_options(options)
+
+    def set_options(self, options: Iterable[str], tooltips: dict[str, str] | None = None) -> None:
+        self.blockSignals(True)
+        self.clear()
+        for opt in options:
+            self.addItem(opt)
+            if tooltips and opt in tooltips:
+                self.setItemData(self.count() - 1, tooltips[opt], Qt.ItemDataRole.ToolTipRole)
+        self.blockSignals(False)
+
+    def set_value(self, value: str | None) -> None:
+        self.blockSignals(True)
+        self.setCurrentIndex(self.findText(value) if value is not None else -1)
+        self.blockSignals(False)
+
+    def value(self) -> str | None:
+        return self.currentText() or None
+
+    def options(self) -> list[str]:
+        return [self.itemText(i) for i in range(self.count())]
+
+
+def choice(options: Sequence[str], max_buttons: int = 5) -> Segmented | ChoiceCombo:
+    """Boutons pour un petit nombre d'options, liste déroulante au-delà."""
+    return Segmented(options) if len(options) <= max_buttons else ChoiceCombo(options)
 
 
 class ToggleSwitch(QAbstractButton):

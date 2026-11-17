@@ -302,6 +302,13 @@ class AnalysisPanel(QWidget):
         layer.mode = mode
         self.message.emit("Dessinez sur l'image ; l'outil « déplacer » redonne la main à la souris")
 
+    def leave(self) -> None:
+        """En quittant la section : la souris redevient « déplacer / zoomer » et l'aperçu en
+        direct s'arrête (sinon l'outil resterait actif ailleurs)."""
+        self.set_tool("", "")
+        if self.preview.isChecked():
+            self.preview.setChecked(False)
+
     def clear_rois(self) -> None:
         for name in (ROI_LAYER, POINTS_LAYER):
             if name in self.viewer.layers:

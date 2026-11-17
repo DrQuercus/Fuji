@@ -5,7 +5,8 @@
 ```
 ┌────────────────────────────────────────────────────────────────────┐
 │ Interface (fuji.ui) — Qt + napari                                  │
-│  Microscope · Assistants · Acquisition · Analyse · Propriétés      │
+│  espace Microscope (live, assistants, acquisition, en direct)      │
+│  espace Analyse (images prises, outils, calques) · liste « Images »│
 ├────────────────────────────────────────────────────────────────────┤
 │ Assistants (fuji.assistants)   │ Analyse (fuji.analysis)           │
 │  Köhler, mise au point,        │  opérations calibrées (définitions│
@@ -70,6 +71,11 @@
 | `ui/config/` | Éditeur de profil : pages, formulaires générés depuis les options des pilotes, modèles |
 | `ui/panels/` | Panneaux : contrôle, assistants, acquisition, analyse, microscopes, réglages |
 | `core/catalog.py` | Objectifs et cubes courants, modèles de microscopes |
+| `core/compose.py` | Images composées en direct : profondeur de champ étendue (`FocusStacker`), panorama à la main (`LiveMosaic`) |
+| `io/captures.py` | Images prises : enregistrement automatique par jour, vignettes, résumés |
+| `ui/gallery.py` | Liste « Images », commune aux espaces Microscope et Analyse |
+| `ui/compose_panel.py` | Compositions en direct dans la section Acquisition (calcul dans un fil de travail) |
+| `ui/flow.py`, `ui/prefs.py` | Disposition qui passe à la ligne (petits écrans) ; préférences (isolables pour les tests) |
 | `ui/selftest.py` | Essai automatique de l'installation (`fuji selftest`) |
 | `packaging/` | Application empaquetée : icônes, script de construction du `.dmg`, contrôle de la version de macOS |
 

@@ -97,6 +97,29 @@ Détails dans [MOTORISATION.md](MOTORISATION.md) et [IA.md](IA.md).
 - [x] Live Micro-Manager : il se figeait au bout de quelques secondes avec une caméra plus
       rapide que la boucle d'affichage (défaut révélé par les machines de GitHub)
 
+## Version 0.6 (fait) — premiers retours sur le vrai matériel
+
+La caméra ToupTek fonctionne sur le Mac : l'image arrive. Corrections et ajouts demandés
+après ce premier essai :
+
+- [x] **La fenêtre tient sur un portable** : elle ne pouvait pas descendre sous 1455 pixels
+      de large ; désormais ≈ 750 (la barre rapide passe à la ligne, la barre du haut se
+      compacte)
+- [x] **Deux espaces séparés, Microscope et Analyse**, chacun avec sa vue d'image : les
+      outils d'analyse (ROI…) ne restent plus actifs ailleurs ; le live se met en pause
+      pendant l'analyse
+- [x] **Liste des images prises** : chaque capture est enregistrée tout de suite
+      (`~/Fuji/Captures/<date>`, OME-TIFF + vignette) ; on l'ouvre dans Analyse quand on en a
+      besoin ; renommer, supprimer (corbeille), changer de dossier. Les acquisitions et les
+      mosaïques y arrivent aussi
+- [x] **Profondeur de champ étendue en direct**, à la main — voir [EN_DIRECT.md](EN_DIRECT.md)
+- [x] **Panorama en direct**, à la main : suivi du déplacement, champ ajouté à l'arrêt,
+      position retrouvée si le suivi est perdu, assemblage final en pleine résolution
+- [x] Simulateur : échantillon épais (« Épaisseur de l'échantillon ») pour essayer sans
+      microscope
+- [x] Sur macOS, les tests et l'essai automatique ne touchent plus aux préférences de
+      l'utilisateur (elles étaient partagées)
+
 ## Prochaines étapes
 
 ### 1. Valider sur ton matériel (priorité)
@@ -104,8 +127,9 @@ Détails dans [MOTORISATION.md](MOTORISATION.md) et [IA.md](IA.md).
 Tout ce qui précède est vérifié par environ 240 tests automatiques, mais **sur du
 matériel simulé**. Voici ce qui n'a jamais pu être essayé et reste à valider :
 
-- [ ] **La vraie caméra** : `fuji touptek install` puis `fuji touptek info` sur le Mac
-      avec la E3ISPM08300KPD
+- [x] **La vraie caméra** : la E3ISPM08300KPD se connecte et l'image arrive (Mac)
+- [ ] Profondeur de champ étendue et panorama sur de vraies lames (réglages de netteté et
+      de suivi à confirmer en 4K)
 - [ ] Vérifier l'alignement des valeurs 12 bits (0–4095 attendu) et l'ordre RGB
 - [ ] Vérifier qu'une capture pendant le live donne bien une image nette et récente
 - [x] **macOS** : les tests de l'interface et l'essai de l'application empaquetée

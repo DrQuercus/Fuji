@@ -98,6 +98,11 @@ _PATHS: dict[str, str] = {
     "roi_line": '<path d="M5.5 18.5l13-13"/><circle cx="5.5" cy="18.5" r="1.7" fill="{c}"/>'
     '<circle cx="18.5" cy="5.5" r="1.7" fill="{c}"/>',
     "roi_point": '<circle cx="12" cy="12" r="2.3" fill="{c}"/><path d="M12 4v4M12 16v4M4 12h4M16 12h4"/>',
+    "gallery": '<rect x="3.5" y="7" width="14" height="12.5" rx="2"/><path d="M7 3.5h11.5a2 2 0 0 1 2 2V16"/>'
+    '<path d="M4 17.5l4.2-4.2 3 3 2.3-2.3 4 4"/><circle cx="13.3" cy="10.8" r="1.2"/>',
+    "mosaic": '<rect x="3.5" y="3.5" width="7.6" height="7.6" rx="1.2"/><rect x="12.9" y="3.5" width="7.6" height="7.6" rx="1.2"/>'
+    '<rect x="3.5" y="12.9" width="7.6" height="7.6" rx="1.2"/><rect x="12.9" y="12.9" width="7.6" height="7.6" rx="1.2"/>',
+    "stack": '<path d="M12 3.5l8.5 4.3L12 12 3.5 7.8z"/><path d="M3.5 12l8.5 4.3 8.5-4.3"/><path d="M3.5 16.2l8.5 4.3 8.5-4.3"/>',
     "pointer": '<path d="M6 4l11.5 7.6-5.2 1.2 3 5.6-2.2 1.2-3-5.6L6 17z"/>',
     "plug": '<path d="M9 3v5M15 3v5"/><path d="M6.5 8h11v3a5.5 5.5 0 0 1-11 0z"/><path d="M12 16.5V21"/>',
 }

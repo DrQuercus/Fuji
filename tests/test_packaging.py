@@ -130,7 +130,15 @@ def test_selftest_passes_on_the_simulated_microscope(tmp_path):
     result = json.loads(report.read_text(encoding="utf-8"))
     failed = [(s["etape"], s["detail"]) for s in result["etapes"] if not s["ok"]]
     assert done.returncode == 0 and result["ok"] and not failed, (failed, done.stderr[-2000:])
-    assert {"fenêtre", "live", "capture", "analyse", "enregistrement", "affichage", "moteurs simulés"} <= {
-        s["etape"] for s in result["etapes"]
-    }
+    assert {
+        "fenêtre",
+        "live",
+        "capture",
+        "ouverture dans Analyse",
+        "analyse",
+        "enregistrement",
+        "affichage",
+        "compositions en direct",
+        "moteurs simulés",
+    } <= {s["etape"] for s in result["etapes"]}
     assert shot.stat().st_size > 20_000

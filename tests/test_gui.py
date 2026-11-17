@@ -25,22 +25,39 @@ def window(qtbot, tmp_path):
     return win
 
 
+def _capture(window, qtbot):
+    """Prend une image : elle rejoint la liste « Images », puis on l'ouvre dans Analyse."""
+    window._on_snap(window.m.snap())
+    qtbot.waitUntil(lambda: not window.gallery._reserved, timeout=10000)
+    info = window.gallery.entries()[0]
+    window.open_capture(info, None)
+    return window.viewer.layers[info.name]
+
+
 def test_window_live_snap_and_analysis(window, qtbot):
     from fuji.analysis import get_operation
 
     window.live.start()
-    qtbot.waitUntil(lambda: "Live" in window.viewer.layers, timeout=5000)
-    assert window.topbar.live.isChecked()
+    qtbot.waitUntil(lambda: "Live" in window.scope_viewer.layers, timeout=5000)
+    assert window.topbar.live.isChecked() and "Live" not in window.viewer.layers
     window.live.stop()
     window._on_snap(window.m.snap())
-    assert "Capture 1" in window.viewer.layers
     assert window.quickbar.histogram._hists
+    assert len(window.viewer.layers) == 0  # la capture va dans la liste, pas dans Analyse
+    qtbot.waitUntil(lambda: not window.gallery._reserved, timeout=10000)
+    (info,) = window.gallery.entries()
+    assert info.name == "capture_001" and info.path.exists() and info.thumbnail_path.exists()
+    assert info.metadata["objective"] == "10x/0.25" and info.pixel_size_um == window.m.pixel_size_um()
+    assert window.sidebar.buttons["images"].text() == "Images (1)"
+    window.gallery.list.setCurrentRow(0)
+    window.gallery.open_selected()  # double-clic : ouvrir dans Analyse
+    assert window.mode == "analyse" and "capture_001" in window.viewer.layers
 
     panel = window.analysis
     op = get_operation("Niveaux de gris")
     panel._op = op
     panel._build_form(op)
-    panel._inputs["image"].setCurrentText("Capture 1")
+    panel._inputs["image"].setCurrentText("capture_001")
     inputs, params = panel._collect()
     panel._show_outputs(op, op.func(*inputs, **params))
     assert any("gris" in layer.name for layer in window.viewer.layers)
@@ -276,19 +293,18 @@ def test_controls_locked_during_acquisition(window, qtbot, tmp_path, monkeypatch
     panel.loops.setValue(4)
     window.live.start()
     done = []
-    panel.acquisition_done.disconnect(window._on_acq_done)  # pas de question « ouvrir ? »
     panel.acquisition_done.connect(done.append)
     panel.start()
     assert window._acquiring and not window.live.running
     assert not window.topbar.capture.isEnabled() and not window.quickbar.isEnabled()
     window.snap()  # refusée pendant l'acquisition
-    assert "Capture 1" not in window.viewer.layers
+    assert not window.gallery.entries()
     qtbot.waitUntil(lambda: bool(done), timeout=10000)
-    window.topbar.set_acquisition(0, 0, False)
-    window._acquiring = False
-    window._set_hardware_controls_enabled(True)
     assert done[0].acquired == 4 and done[0].error is None
     assert window.topbar.capture.isEnabled() and window.quickbar.isEnabled()
+    (entry,) = window.gallery.entries()  # le fichier de l'acquisition rejoint la liste des images
+    assert entry.kind == "acquisition" and entry.path.exists() and "4 images" in entry.summary
+    assert window.live.running  # le live, arrêté pendant l'acquisition, a repris
 
 
 def test_quickbar_keeps_objectives_with_same_magnification_apart(qtbot, mono_demo_profile):
@@ -369,7 +385,7 @@ def test_focus_peaking_layer_is_scaled_to_the_image(window):
     frame = np.random.default_rng(0).integers(0, 4000, (2160, 3840), dtype=np.uint16)
     widget.peaking.setChecked(True)
     widget.process(frame)
-    layer = window.viewer.layers["Zones nettes"]
+    layer = window.scope_viewer.layers["Zones nettes"]
     px = window.m.pixel_size_um() or 1.0
     step = round(float(layer.scale[-1]) / px)
     assert step == 4 and layer.data.shape == (540, 960)
@@ -430,8 +446,7 @@ def _last_table(window):
 def test_roi_tools_and_quick_measurements(window, qtbot):
     import numpy as np
 
-    window._on_snap(window.m.snap())
-    capture = window.viewer.layers["Capture 1"]
+    capture = _capture(window, qtbot)
     px = capture.metadata["pixel_size_um"]
     panel = window.analysis
     panel.set_tool("shapes", "add_rectangle")
@@ -491,11 +506,11 @@ def test_roi_coordinates_follow_the_image_scale(window):
 
 
 def test_live_preview_shows_and_removes_its_layer(window, qtbot):
-    window._on_snap(window.m.snap())
+    _capture(window, qtbot)
     panel = window.analysis
     window.sidebar.select("analysis")
     panel.select_operation("Flou gaussien")
-    panel._inputs["image"].setCurrentText("Capture 1")
+    panel._inputs["image"].setCurrentText("capture_001")
     before = len(window.viewer.layers)
 
     def previews():
@@ -503,13 +518,13 @@ def test_live_preview_shows_and_removes_its_layer(window, qtbot):
 
     panel.preview.setChecked(True)
     qtbot.waitUntil(lambda: bool(previews()), timeout=10000)
-    assert previews() == ["Aperçu — Capture 1 (flou σ=2)"]
+    assert previews() == ["Aperçu — capture_001 (flou σ=2)"]
     next(w for w in panel._params if w.name == "sigma").value = 5.0
-    qtbot.waitUntil(lambda: previews() == ["Aperçu — Capture 1 (flou σ=5)"], timeout=10000)
-    assert "Aperçu — Capture 1 (flou σ=5)" not in [panel._inputs["image"].itemText(i) for i in range(5)]
+    qtbot.waitUntil(lambda: previews() == ["Aperçu — capture_001 (flou σ=5)"], timeout=10000)
+    assert "Aperçu — capture_001 (flou σ=5)" not in [panel._inputs["image"].itemText(i) for i in range(5)]
     panel._run()
     _idle(qtbot, panel)
-    assert previews() == [] and window.viewer.layers[-1].name == "Capture 1 (flou σ=5)"
+    assert previews() == [] and window.viewer.layers[-1].name == "capture_001 (flou σ=5)"
     assert len(window.viewer.layers) == before + 1
     panel.preview.setChecked(False)
 
@@ -582,3 +597,159 @@ def test_every_operation_builds_its_form(window):
     panel.search.setText("threshold")  # recherche par le nom de la commande ImageJ
     names = [panel.list.item(i).data(256) for i in range(panel.list.count()) if panel.list.item(i).data(256)]
     assert "Seuillage automatique" in names and "Seuillage local" in names and "Flou gaussien" not in names
+
+
+# ------------------------------------------------- espaces, liste des images, petit écran
+def test_microscope_and_analysis_spaces_stay_apart(window, qtbot):
+    from fuji.ui.chrome import sections_of
+
+    assert window.mode == "microscope" and window.canvas_stack.currentIndex() == 0
+    visible = [k for k, b in window.sidebar.buttons.items() if not b.isHidden()]
+    assert visible == sections_of("microscope")
+    window.live.start()
+    qtbot.waitUntil(lambda: "Live" in window.scope_viewer.layers, timeout=5000)
+
+    window.set_mode("analyse")
+    assert window.canvas_stack.currentIndex() == 1 and not window.live.running  # live en pause
+    assert window.topbar.live.isHidden() and window.topbar.capture.isHidden()
+    assert [k for k, b in window.sidebar.buttons.items() if not b.isHidden()] == sections_of("analyse")
+    window.sidebar.select("analysis")
+    window.analysis.set_tool("shapes", "add_rectangle")
+    roi = window.viewer.layers["ROI"]
+    window.sidebar.select("images")  # changer de section relâche l'outil de dessin
+    assert roi.mode == "pan_zoom"
+
+    window.set_mode("microscope")
+    qtbot.waitUntil(lambda: window.live.running, timeout=5000)  # le live reprend au retour
+    assert window._section == "control"
+    window.sidebar.select("layers")  # une section de l'autre espace y emmène
+    assert window.mode == "analyse"
+    window._toggle_live()  # Ctrl+L depuis Analyse : retour au microscope, live allumé
+    assert window.mode == "microscope" and window.live.running
+    window.live.stop()
+
+
+def test_image_list_rename_delete_and_reload(window, qtbot, monkeypatch):
+    from qtpy.QtWidgets import QInputDialog, QMessageBox
+
+    from fuji.ui.gallery import GalleryPanel
+
+    gallery = window.gallery
+    for _ in range(3):
+        window._on_snap(window.m.snap())
+    qtbot.waitUntil(lambda: not gallery._reserved, timeout=10000)
+    assert [i.name for i in gallery.entries()] == ["capture_003", "capture_002", "capture_001"]
+
+    gallery.list.setCurrentRow(2)
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("lame A — champ 1", True))
+    gallery.rename_selected()
+    renamed = gallery.entries()[2]
+    assert renamed.name == "lame A — champ 1" and renamed.path.exists() and renamed.thumbnail_path.exists()
+
+    gallery.list.setCurrentRow(0)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    gone = gallery.entries()[0].path
+    gallery.delete_selected()
+    assert not gone.exists() and [i.name for i in gallery.entries()] == ["capture_002", "lame A — champ 1"]
+
+    again = GalleryPanel()  # le lendemain matin… ou après un redémarrage de Fuji
+    qtbot.addWidget(again)
+    names = [i.name for i in again.entries()]
+    assert names == ["capture_002", "lame A — champ 1"]
+    assert again.entries()[1].summary == renamed.summary and again.entries()[1].metadata["objective"]
+
+
+def test_an_image_that_cannot_be_saved_is_kept_and_reported(window, qtbot, monkeypatch):
+    from qtpy.QtWidgets import QMessageBox
+
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a[2]))
+
+    def disk_full(*_a, **_k):  # type: ignore[no-untyped-def]
+        raise OSError("disque plein")
+
+    monkeypatch.setattr(window.gallery.store, "save", disk_full)
+    for _ in range(3):  # assez pour qu'elle ne soit plus parmi les images gardées en mémoire
+        window._on_snap(window.m.snap())
+    qtbot.waitUntil(lambda: len(warnings) == 3, timeout=10000)
+    assert "disque plein" in warnings[0]
+    first = window.gallery.list.item(2)
+    assert "NON enregistrée" in first.text()
+    window.gallery.open_item(first)  # toujours récupérable : ouverte depuis la mémoire
+    assert "capture_001" in window.viewer.layers
+
+
+def test_window_fits_a_small_laptop_screen(qtbot, tmp_path):
+    """Le Leitz manuel avec ses 4 objectifs : la fenêtre doit tenir sur un portable."""
+    from fuji.core.profile import MicroscopeProfile, builtin_profiles
+    from fuji.ui.app import create_window
+
+    profile = MicroscopeProfile.load(builtin_profiles()["leitz-diaplan-touptek"])
+    for device in profile.devices:  # la caméra ToupTek n'est pas là : caméra simulée
+        if device.driver.startswith("touptek"):
+            device.driver = "demo.camera"
+            device.options = {"width": 640, "height": 360, "color": True, "simulate_timing": False}
+    path = tmp_path / "leitz.yaml"
+    profile.save(path)
+    _, win = create_window(str(path))
+    qtbot.addWidget(win)
+    win.show()
+    for mode in ("microscope", "analyse"):
+        win.set_mode(mode)
+        hint = win.minimumSizeHint().expandedTo(win.minimumSize())
+        assert hint.width() <= 800 and hint.height() <= 700, (mode, hint)
+    win.set_mode("microscope")
+    win.resize(1024, 640)
+    qtbot.waitUntil(lambda: win.width() <= 1024, timeout=3000)
+    assert win.quickbar.height() < 200  # la barre rapide passe sur deux lignes, sans exploser
+
+
+def test_live_compositions_by_hand_from_the_acquisition_section(window, qtbot):
+    """Profondeur de champ étendue en tournant la mise au point, panorama en poussant la
+    lame : comme sur le Leitz manuel, mais avec le simulateur."""
+    m, compose, viewer = window.m, window.compose, window.scope_viewer
+    window.sidebar.select("acquisition")
+
+    m.camera.set_property("Épaisseur de l'échantillon", 40.0)
+    compose.start("edf")
+    assert compose.running and window.live.running
+    for z in (-20, -10, 0, 10, 20):
+        m.focus.move_to(z)
+        qtbot.wait(500)
+    qtbot.waitUntil(lambda: "Composition" in viewer.layers and compose.finish_btn.isEnabled(), timeout=10000)
+    assert not viewer.layers["Live"].visible  # on regarde l'image qui se construit
+    compose.finish()
+    qtbot.waitUntil(lambda: bool(window.gallery.entries()) and not window.gallery._reserved, timeout=10000)
+    edf = window.gallery.entries()[0]
+    assert edf.kind == "edf" and edf.name == "profondeur_001" and "images fusionnées" in edf.summary
+    assert "Composition" not in viewer.layers and viewer.layers["Live"].visible
+
+    m.camera.set_property("Épaisseur de l'échantillon", 0.0)
+    m.focus.move_to(0)
+    compose.start("panorama")
+    here = (0.0, 0.0)
+    for n, stop in enumerate([(0.0, 0.0), (160.0, 0.0), (160.0, 120.0)], start=1):
+        for a in (0.25, 0.5, 0.75, 1.0):  # la main pousse la lame : un mouvement continu
+            m.xy_stage.move_to(here[0] + a * (stop[0] - here[0]), here[1] + a * (stop[1] - here[1]))
+            qtbot.wait(250)
+        here = stop
+        qtbot.waitUntil(lambda n=n: len(compose._engine.tiles) == n, timeout=15000)
+    assert "Champ actuel" in viewer.layers and "Composition" in viewer.layers
+    assert compose.undo_btn.isEnabled()
+    compose.undo()
+    qtbot.wait(800)  # la lame n'a pas bougé : le champ retiré ne revient pas
+    assert len(compose._engine.tiles) == 2
+    compose.finish()
+    qtbot.waitUntil(lambda: not compose.running, timeout=30000)
+    qtbot.waitUntil(lambda: not window.gallery._reserved, timeout=10000)
+    pano = window.gallery.entries()[0]
+    field_h, field_w = m.camera.sensor_shape()
+    assert pano.kind == "panorama" and "2 champs" in pano.summary
+    # deux champs côte à côte (la caméra simulée est tournée de 1,5° : léger décalage vertical)
+    assert pano.shape[1] > 1.4 * field_w and field_h <= pano.shape[0] < 1.05 * field_h
+
+    compose.start("edf")  # annuler : rien n'est ajouté
+    qtbot.wait(300)
+    compose.cancel()
+    assert not compose.running and len(window.gallery.entries()) == 2
+    window.live.stop()

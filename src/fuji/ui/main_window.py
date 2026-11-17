@@ -3,14 +3,18 @@
 ::
 
     ┌──────────────────────── barre supérieure ─────────────────────────┐
-    │ logo · microscope ▾                         Live  Capturer  Expert │
+    │ logo [Microscope|Analyse]  microscope ▾          Live  Capturer   │
     ├────┬───────────────────────────────────────┬──────────────────────┤
     │ na │                                       │ panneau de la section│
-    │ vi │        image (napari)                 │ (contrôle, assistants│
-    │ ga │                                       │  acquisition, ...)   │
+    │ vi │   image : live (espace Microscope)    │ (contrôle, images,   │
+    │ ga │   ou images ouvertes (espace Analyse) │  outils d'analyse...)│
     │ ti ├───────────────────────────────────────┤                      │
-    │ on │ barre rapide : exposition · objectif · canal · histogramme   │
+    │ on │ barre rapide (Microscope seulement)   │                      │
     └────┴───────────────────────────────────────┴──────────────────────┘
+
+Deux espaces de travail, chacun avec sa propre vue d'image : **Microscope** (régler, voir
+le live, prendre des images) et **Analyse** (ouvrir les images prises, mesurer). Les images
+prises arrivent dans la liste « Images », commune aux deux espaces.
 """
 
 from __future__ import annotations
@@ -22,7 +26,7 @@ from typing import Any
 import numpy as np
 from napari.components import ViewerModel
 from napari.qt import QtViewer
-from qtpy.QtCore import QSettings, Qt, Signal
+from qtpy.QtCore import Qt, Signal
 from qtpy.QtGui import QAction, QKeySequence
 from qtpy.QtWidgets import (
     QApplication,
@@ -50,10 +54,12 @@ from fuji.core.microscope import Microscope
 from fuji.core.profile import MicroscopeProfile, available_profiles
 from fuji.io import save_image
 
-from .chrome import SECTIONS, Sidebar, TopBar
+from .chrome import SECTIONS, Sidebar, TopBar, mode_of, sections_of
 from .components import PanelHeader
+from .compose_panel import ComposePanel
 from .config.editor import ConfigEditor
 from .config.wizard import NewMicroscopeDialog
+from .gallery import GalleryPanel
 from .live import LiveController, contrast_for, units_for
 from .panels.acquisition_panel import AcquisitionPanel
 from .panels.analysis_panel import AnalysisPanel, layer_to_image
@@ -62,12 +68,14 @@ from .panels.config_panel import ConfigPanel
 from .panels.microscope_panel import MicroscopePanel
 from .panels.properties_panel import PropertiesPanel
 from .panels.settings_panel import SettingsPanel
+from .prefs import settings
 from .qt_bridge import QtManualActionHandler
 from .quickbar import QuickBar
 from .theme import ThemeManager, napari_theme_id, palette
 from .widgets import ResultsWidget
 
 SUBTITLES = {
+    "images": "Enregistrées automatiquement. Double-clic : ouvrir dans Analyse.",
     "control": "Caméra, optique, éclairage, platine et mise au point.",
     "assistants": "Köhler, mise au point, calibration du pixel, éclairage.",
     "acquisition": "Time-lapse, piles Z, canaux, positions → OME-TIFF.",
@@ -76,8 +84,15 @@ SUBTITLES = {
     "config": "Configuration complète et choix du microscope.",
     "settings": "Apparence, Fiji, caméras ToupTek, dossiers.",
 }
-TITLES = {key: title for key, title, _icon, _bottom in SECTIONS}
-TITLES.update(control="Contrôle du microscope", config="Microscopes")
+TITLES = {key: title for key, title, *_ in SECTIONS}
+TITLES.update(
+    control="Contrôle du microscope",
+    config="Microscopes",
+    analysis="Outils d'analyse",
+    images="Images prises",
+)
+#: section affichée en entrant dans un espace pour la première fois
+DEFAULT_SECTION = {"microscope": "control", "analyse": "analysis"}
 
 #: Au-delà de cette taille, un TIFF est lu à la demande au lieu d'être chargé en mémoire.
 _MEMMAP_BYTES = 1 << 30
@@ -127,7 +142,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self, microscope: Microscope) -> None:
         super().__init__()
-        self.settings = QSettings("Fuji", "Fuji")
+        self.settings = settings()
         self.resize(1560, 980)
         self._captures = 0
         self._frame_counter = 0
@@ -142,10 +157,18 @@ class MainWindow(QMainWindow):
         self._ai_item.connect(self._show_ai_item)
         self._ai_action.connect(lambda text: self.notify(f"IA : {text}"))
 
-        # visualisation napari ---------------------------------------------------
-        self.viewer = ViewerModel(title="Fuji")
+        # visualisation napari : une vue par espace de travail -------------------
+        # Microscope : live, aides des assistants, acquisitions, compositions en direct
+        self.scope_viewer = ViewerModel(title="Fuji — microscope")
+        _scale_bar(self.scope_viewer).visible = True
+        self.scope_qt = QtViewer(self.scope_viewer)
+        # Analyse : images ouvertes, ROI, résultats
+        self.viewer = ViewerModel(title="Fuji — analyse")
         _scale_bar(self.viewer).visible = True
         self.qt_viewer = QtViewer(self.viewer)
+        self._mode: str | None = None
+        self._section: str | None = None
+        self._live_paused = False
         self._apply_viewer_theme()
         ThemeManager.get().changed.connect(self._on_theme_changed)
         self.manual_handler = QtManualActionHandler(self)
@@ -158,19 +181,26 @@ class MainWindow(QMainWindow):
         self.topbar = TopBar()
         root.addWidget(self.topbar)
         self.sidebar = Sidebar()
-        canvas_col = QWidget()
-        canvas_col.setObjectName("CanvasFrame")
-        canvas_col.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.canvas_layout = QVBoxLayout(canvas_col)
-        self.canvas_layout.setContentsMargins(0, 0, 0, 0)
-        self.canvas_layout.setSpacing(0)
-        self.canvas_layout.addWidget(self.qt_viewer, 1)
+        self.canvas_stack = QStackedWidget()
+        self.canvas_stack.setMinimumWidth(320)
+        pages = []
+        for qt in (self.scope_qt, self.qt_viewer):
+            page = QWidget()
+            page.setObjectName("CanvasFrame")
+            page.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            page_lay = QVBoxLayout(page)
+            page_lay.setContentsMargins(0, 0, 0, 0)
+            page_lay.setSpacing(0)
+            page_lay.addWidget(qt, 1)
+            self.canvas_stack.addWidget(page)
+            pages.append(page_lay)
+        self.canvas_layout = pages[0]  # la barre rapide s'y ajoute (espace Microscope)
         self.quickbar: QuickBar | None = None
 
         self.side = QWidget()
         self.side.setObjectName("SidePanel")
         self.side.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.side.setMinimumWidth(360)
+        self.side.setMinimumWidth(320)
         side_lay = QVBoxLayout(self.side)
         side_lay.setContentsMargins(18, 16, 14, 12)
         side_lay.setSpacing(8)
@@ -185,7 +215,7 @@ class MainWindow(QMainWindow):
         body.addWidget(self.sidebar)
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setChildrenCollapsible(False)
-        self.splitter.addWidget(canvas_col)
+        self.splitter.addWidget(self.canvas_stack)
         self.splitter.addWidget(self.side)
         self.splitter.setStretchFactor(0, 1)
         self.splitter.setSizes([1100, 420])
@@ -214,6 +244,13 @@ class MainWindow(QMainWindow):
         self.analysis.message.connect(self.notify)
         self._set_page("analysis", _scroll(self.analysis))
         self._set_page("layers", LayersPanel(self.qt_viewer))
+        self.gallery = GalleryPanel()
+        self.gallery.open_requested.connect(self.open_capture)
+        self.gallery.open_file_requested.connect(self.open_dialog)
+        self.gallery.message.connect(self.notify)
+        self.gallery.count_changed.connect(lambda n: self.sidebar.set_badge("images", f"({n})" if n else ""))
+        self._set_page("images", self.gallery)
+        self.sidebar.set_badge("images", f"({len(self.gallery.entries())})" if self.gallery.entries() else "")
         self.settings_panel = SettingsPanel()
         self.settings_panel.expert_changed.connect(self.set_expert)
         self.settings_panel.auto_contrast_changed.connect(self._set_auto_contrast)
@@ -236,11 +273,13 @@ class MainWindow(QMainWindow):
         self.topbar.expert_toggled.connect(self.set_expert)
         self.topbar.profile_selected.connect(self.switch_profile)
         self.topbar.manage_profiles.connect(lambda: self.sidebar.select("config"))
+        self.topbar.mode_changed.connect(self.set_mode)
         self.viewer.events.status.connect(self._on_status)
-        # double-clic : centrer le point (platine motorisée) ; sinon le zoom habituel de napari
-        self._default_double_click = list(self.viewer.mouse_double_click_callbacks)
-        self.viewer.mouse_double_click_callbacks.clear()
-        self.viewer.mouse_double_click_callbacks.append(self._on_double_click)
+        self.scope_viewer.events.status.connect(self._on_status)
+        # double-clic sur le live : centrer le point (platine motorisée) ; sinon le zoom de napari
+        self._default_double_click = list(self.scope_viewer.mouse_double_click_callbacks)
+        self.scope_viewer.mouse_double_click_callbacks.clear()
+        self.scope_viewer.mouse_double_click_callbacks.append(self._on_double_click)
 
         self.set_microscope(microscope)
         self._build_menus()
@@ -248,7 +287,7 @@ class MainWindow(QMainWindow):
         geometry = self.settings.value("window_geometry")
         if geometry is not None:
             self.restoreGeometry(geometry)
-        self.sidebar.select(self.settings.value("section", "control"))
+        self.set_mode(str(self.settings.value("mode", "microscope")))
 
     # ================================================================ microscope
     def set_microscope(self, scope: Microscope) -> None:
@@ -259,7 +298,7 @@ class MainWindow(QMainWindow):
         self._live_before_acq = False
         self.m = scope
         scope.manual_handler = self.manual_handler
-        self.live = LiveController(scope, self.viewer, self)
+        self.live = LiveController(scope, self.scope_viewer, self)
         self.live.fps_changed.connect(lambda f: self.fps_label.setText(f"{f:4.1f} im/s"))
         self.live.live_changed.connect(self._on_live_changed)
         self.live.frame_shown.connect(self._on_live_frame)
@@ -273,16 +312,26 @@ class MainWindow(QMainWindow):
         self.control_tabs = control_tabs
         self._set_page("control", control_tabs)
 
-        self.assistants = AssistantsPanel(scope, self.viewer, self.live)
+        self.assistants = AssistantsPanel(scope, self.scope_viewer, self.live)
         self._set_page("assistants", _scroll(self.assistants))
         self.acquisition = AcquisitionPanel(scope)
         self.acquisition.starting.connect(self._on_acq_starting)
         self.acquisition.frame_ready.connect(self._on_acq_frame)
         self.acquisition.acquisition_done.connect(self._on_acq_done)
-        self.acquisition.mosaic_ready.connect(lambda image, name, px: self.add_frame(image, name, None, px))
+        self.acquisition.mosaic_ready.connect(self._on_mosaic)
         self.acquisition.bridge.progress.connect(lambda d, t: self.topbar.set_acquisition(d, t, True))
         self.acquisition.bridge.finished.connect(lambda *_: self.topbar.set_acquisition(0, 0, False))
-        self._set_page("acquisition", _scroll(self.acquisition))
+        # en haut : compositions en direct (à la main) ; en dessous : acquisitions programmées
+        self.compose = ComposePanel(scope, self.scope_viewer, self.live, corrector=self._live_corrector)
+        self.compose.message.connect(self.notify)
+        self.compose.done.connect(self._on_composed)
+        acq_page = QWidget()
+        acq_lay = QVBoxLayout(acq_page)
+        acq_lay.setContentsMargins(0, 0, 0, 0)
+        acq_lay.setSpacing(10)
+        acq_lay.addWidget(self.compose)
+        acq_lay.addWidget(self.acquisition)
+        self._set_page("acquisition", _scroll(acq_page))
         self.config_panel = ConfigPanel(scope)
         self.config_panel.edit_requested.connect(self.edit_profile)
         self.config_panel.new_requested.connect(self.new_profile)
@@ -322,7 +371,7 @@ class MainWindow(QMainWindow):
         except RuntimeError:
             pass
         # arrêter les minuteurs des panneaux : ils interrogeraient un matériel déconnecté
-        for name in ("control", "assistants"):
+        for name in ("compose", "control", "assistants"):
             panel = getattr(self, name, None)
             try:
                 if panel is not None:
@@ -491,12 +540,53 @@ class MainWindow(QMainWindow):
         self._update_optics()
 
     # ================================================================ sections
+    def set_mode(self, mode: str, section: str | None = None) -> None:
+        """Passe dans l'espace « microscope » ou « analyse » (et à une de ses sections).
+
+        En passant dans Analyse, le live se met en pause (il reprend au retour) et les outils
+        de dessin des ROI se désactivent en sortant d'Analyse."""
+        if mode not in DEFAULT_SECTION:
+            mode = "microscope"
+        if mode != self._mode:
+            if self._mode == "microscope" and self.live is not None and self.live.running:
+                self._live_paused = True
+                self.live.stop()
+            if self._mode == "analyse":
+                self.analysis.leave()
+            self._mode = mode
+            self.canvas_stack.setCurrentIndex(0 if mode == "microscope" else 1)
+            self.sidebar.set_mode(mode)
+            self.topbar.set_mode(mode)
+            self.settings.setValue("mode", mode)
+            if mode == "microscope" and self._live_paused:
+                self._live_paused = False
+                if self.live is not None and not self._acquiring and self.m is not None and self.m.connected:
+                    self.live.start()
+        wanted = section or str(self.settings.value(f"section/{mode}", DEFAULT_SECTION[mode]))
+        if wanted not in sections_of(mode):
+            wanted = DEFAULT_SECTION[mode]
+        self.sidebar.select(wanted)
+
+    @property
+    def mode(self) -> str:
+        return self._mode or "microscope"
+
+    def current_viewer(self) -> ViewerModel:
+        return self.scope_viewer if self.mode == "microscope" else self.viewer
+
     def show_section(self, key: str) -> None:
+        mode = mode_of(key, self.mode)
+        if mode != self._mode:
+            self.set_mode(mode, key)
+            return
+        if self._section == "analysis" and key != "analysis":
+            self.analysis.leave()  # les outils de dessin ne restent pas actifs ailleurs
+        self._section = key
         self.side.setVisible(True)
         self.stack.setCurrentWidget(self._pages[key])
         self.panel_header.title.setText(TITLES.get(key, key))
         self.panel_header.subtitle.setText(SUBTITLES.get(key, ""))
-        self.settings.setValue("section", key)
+        self.settings.setValue(f"section/{mode}", key)
 
     def toggle_side_panel(self) -> None:
         self.side.setVisible(not self.side.isVisible())
@@ -505,7 +595,10 @@ class MainWindow(QMainWindow):
         expert = bool(expert)
         self._expert = expert
         self.settings.setValue("expert", expert)
-        for toggle in (self.topbar.expert, self.settings_panel.expert):
+        toggles = [self.topbar.expert, self.settings_panel.expert]
+        if hasattr(self, "expert_action"):
+            toggles.append(self.expert_action)
+        for toggle in toggles:
             toggle.blockSignals(True)
             toggle.setChecked(expert)
             toggle.blockSignals(False)
@@ -527,10 +620,11 @@ class MainWindow(QMainWindow):
             retheme(top)
 
     def _apply_viewer_theme(self) -> None:
-        try:
-            self.viewer.theme = napari_theme_id(palette())
-        except Exception:  # thème non enregistré (napari absent du style)
-            pass
+        for viewer in (self.scope_viewer, self.viewer):
+            try:
+                viewer.theme = napari_theme_id(palette())
+            except Exception:  # thème non enregistré (napari absent du style)
+                pass
 
     # ================================================================ menus
     def _action(
@@ -569,12 +663,17 @@ class MainWindow(QMainWindow):
         m_scope.addAction(self._action("Informations matériel…", self.show_hardware_info))
 
         m_view = mb.addMenu("&Affichage")
-        for i, (key, title, _icon, _b) in enumerate(SECTIONS, start=1):
-            m_view.addAction(self._action(title, lambda _=False, k=key: self.sidebar.select(k), f"Ctrl+{i}"))
+        m_view.addAction(self._action("Espace Microscope", lambda: self.set_mode("microscope"), "Ctrl+1"))
+        m_view.addAction(self._action("Espace Analyse", lambda: self.set_mode("analyse"), "Ctrl+2"))
+        m_view.addAction(self._action("Images prises", lambda: self.sidebar.select("images"), "Ctrl+3"))
         m_view.addSeparator()
+        self.expert_action = self._action("Mode expert", self.set_expert, checkable=True)
+        m_view.addAction(self.expert_action)
         m_view.addAction(self._action("Replier / déplier le panneau", self.toggle_side_panel, "Ctrl+B"))
         m_view.addAction(self._action("Thème clair / sombre", ThemeManager.get().toggle_mode, "Ctrl+Shift+T"))
-        m_view.addAction(self._action("Recentrer l'image", self.viewer.reset_view, "Ctrl+R"))
+        m_view.addAction(
+            self._action("Recentrer l'image", lambda: self.current_viewer().reset_view(), "Ctrl+R")
+        )
 
         m_an = mb.addMenu("&Analyse")
         # mêmes gestes que dans ImageJ : mesurer, histogramme, profil sur l'image active
@@ -731,8 +830,15 @@ class MainWindow(QMainWindow):
         self.optics_label.setText("  ·  ".join(parts))
 
     def _toggle_live(self) -> None:
-        if self.live is not None and not self._acquiring:
-            self.live.toggle()
+        if self.live is None or self._acquiring:
+            return
+        if self.mode != "microscope":  # le live se regarde dans l'espace Microscope
+            self._live_paused = False
+            self.set_mode("microscope")
+            if not self.live.running:
+                self.live.start()
+            return
+        self.live.toggle()
 
     def _live_toggled(self, on: bool) -> None:
         if self.live is None or self._acquiring:
@@ -767,6 +873,8 @@ class MainWindow(QMainWindow):
         worker.start()
 
     def _on_snap(self, frame: Frame) -> None:
+        """La capture rejoint la liste des images prises (enregistrée tout de suite) ; elle
+        s'ouvre dans l'espace Analyse quand on en a besoin."""
         self._captures += 1
         data, corrected = self.assistants.illumination.correct(frame.data)
         metadata = frame.metadata.to_dict()
@@ -776,11 +884,50 @@ class MainWindow(QMainWindow):
             note = " · champ plat corrigé"
         elif corrected is False:
             note = " · ⚠ champ plat NON appliqué (pas de référence pour cet objectif et ce canal)"
-        self.add_frame(data, f"Capture {self._captures}", metadata, frame.metadata.pixel_size_um)
+        info = self.gallery.add_image(
+            data, kind="capture", metadata=metadata, pixel_size_um=frame.metadata.pixel_size_um
+        )
         if self.quickbar is not None:
             self.quickbar.show_frame(data)
-        md = frame.metadata
-        self.notify(f"Capture {self._captures} : {md.channel or ''} {md.exposure_ms or 0:.1f} ms{note}")
+        self.notify(f"{info.name} enregistrée — liste « Images »{note}")
+
+    def _live_corrector(self) -> Any:
+        """Correction de champ plat à appliquer aux images du live pendant une composition
+        (si elle est demandée dans l'assistant « Éclairage ») : un panorama sans raccords."""
+        illum = self.assistants.illumination
+        if not illum.apply.isChecked():
+            return None
+        store, keys = illum.store, illum._keys()
+
+        def correct(data: np.ndarray) -> np.ndarray:
+            out = store.correct(data, *keys)
+            return data if out is None else out
+
+        return correct
+
+    def _on_composed(self, image: np.ndarray, kind: str, metadata: Any, px: Any, summary: str) -> None:
+        info = self.gallery.add_image(
+            image, kind=kind, metadata=metadata, pixel_size_um=px, summary=summary or None
+        )
+        self.notify(f"{info.name} : dans la liste « Images » (double-clic pour l'ouvrir dans Analyse)")
+
+    def _on_mosaic(self, image: np.ndarray, name: str, pixel_size_um: float | None) -> None:
+        info = self.gallery.add_image(image, kind="mosaique", summary=name, pixel_size_um=pixel_size_um)
+        self.notify(f"{name} assemblée : {info.name}, dans la liste « Images »")
+
+    def open_capture(self, info: Any, data: np.ndarray | None = None) -> None:
+        """Ouvre une image de la liste dans l'espace Analyse (ou la remontre si elle y est)."""
+        if info.name in self.viewer.layers:
+            self.viewer.layers.selection.active = self.viewer.layers[info.name]
+        elif data is not None:
+            self.add_frame(data, info.name, {**info.metadata, "source": str(info.path)}, info.pixel_size_um)
+        elif info.path.exists():
+            self.open_file(info.path)
+        else:
+            QMessageBox.warning(self, "Ouvrir", f"Fichier introuvable :\n{info.path}")
+            return
+        if self.mode != "analyse":
+            self.set_mode("analyse", "analysis")
 
     def add_frame(
         self,
@@ -807,6 +954,8 @@ class MainWindow(QMainWindow):
         """Juste avant une acquisition : le live s'arrête et les réglages se verrouillent,
         pour que rien d'autre ne commande le matériel pendant la séquence."""
         self._acquiring = True
+        if self.compose.running:  # l'acquisition prend la caméra : la composition s'arrête
+            self.compose.cancel()
         self._live_before_acq = self.live is not None and self.live.running
         if self._live_before_acq and self.live is not None:
             self.live.stop()
@@ -818,19 +967,18 @@ class MainWindow(QMainWindow):
 
     def _on_acq_done(self, summary: Any) -> None:
         self.topbar.set_acquisition(0, 0, False)
-        by_hand = self._acquiring  # sinon l'acquisition a été lancée par l'IA : pas de question
         self._acquiring = False
         self._set_hardware_controls_enabled(True)
         if self._live_before_acq and self.live is not None and self.m is not None and self.m.connected:
-            self.live.start()
+            if self.mode == "microscope":
+                self.live.start()
+            else:
+                self._live_paused = True  # reprendra au retour dans l'espace Microscope
         self._live_before_acq = False
-        if by_hand and summary.files and not summary.error:
-            answer = QMessageBox.question(
-                self, "Acquisition terminée", f"{summary.acquired} images enregistrées.\nOuvrir le résultat ?"
-            )
-            if answer == QMessageBox.StandardButton.Yes:
-                for f in summary.files:
-                    self.open_file(f)
+        if summary.files and not summary.error:
+            for f in summary.files:
+                self.gallery.add_existing(f, "acquisition", f"{summary.acquired} images")
+            self.notify(f"Acquisition terminée : {summary.acquired} images, dans la liste « Images »")
 
     def open_dialog(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -841,6 +989,7 @@ class MainWindow(QMainWindow):
         )
         if path:
             self.open_file(path)
+            self.set_mode("analyse")
 
     def open_file(self, path: str | Path) -> None:
         from fuji.analysis.image import read_pixel_size_um
@@ -934,7 +1083,8 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            self.qt_viewer.screenshot(path, flash=False)
+            qt = self.scope_qt if self.mode == "microscope" else self.qt_viewer
+            qt.screenshot(path, flash=False)
         except Exception as exc:
             QMessageBox.warning(self, "Exporter la vue", f"Export impossible : {exc}")
             return
@@ -1103,5 +1253,6 @@ class MainWindow(QMainWindow):
         if not getattr(self, "_closed", False):
             self._closed = True
             self.settings.setValue("window_geometry", self.saveGeometry())
+            self.gallery.wait_pending()  # une image en cours d'écriture ne doit pas être tronquée
             self._teardown()
         super().closeEvent(event)

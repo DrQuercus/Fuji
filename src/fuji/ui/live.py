@@ -11,6 +11,8 @@ from qtpy.QtCore import QObject, QTimer, Signal
 
 from fuji.core.microscope import Microscope
 
+from .prefs import settings
+
 LIVE_LAYER = "Live"
 
 
@@ -40,9 +42,8 @@ class LiveController(QObject):
         super().__init__(parent)
         self.microscope = microscope
         self.viewer = viewer
-        from qtpy.QtCore import QSettings
 
-        self.auto_contrast = QSettings("Fuji", "Fuji").value("live/auto_contrast", True, type=bool)
+        self.auto_contrast = settings().value("live/auto_contrast", True, type=bool)
         self._timer = QTimer(self)
         self._timer.setInterval(30)
         self._timer.timeout.connect(self._poll)

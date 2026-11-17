@@ -46,6 +46,7 @@ def run(report: str | None = None, screenshot: str | None = None) -> int:
     steps: list[dict[str, Any]] = []
     scratch = Path(tempfile.mkdtemp(prefix="fuji-essai-"))
     os.environ["FUJI_HOME"] = str(scratch / "fuji")  # ni profils ni calibrations de l'utilisateur
+    os.environ["FUJI_CAPTURES"] = str(scratch / "images")  # ni ses images
 
     def step(name: str, fn: Callable[[], Any]) -> Any:
         start = time.monotonic()
@@ -98,7 +99,8 @@ def run(report: str | None = None, screenshot: str | None = None) -> int:
 
         win = state["win"]
         win.live.start()
-        wait(lambda: LIVE_LAYER in win.viewer.layers)
+        win.set_mode("microscope")
+        wait(lambda: LIVE_LAYER in win.scope_viewer.layers)
         # le live tourne-t-il vraiment ? on attend trois images différentes (un ordinateur
         # lent en met plus de temps, ce n'est pas une panne)
         start, seen, last = time.monotonic(), 0, None
@@ -107,7 +109,7 @@ def run(report: str | None = None, screenshot: str | None = None) -> int:
                 win.live.stop()
                 raise RuntimeError(f"le live n'a affiché que {seen} image(s) en 45 s")
             state["app"].processEvents()
-            data = win.viewer.layers[LIVE_LAYER].data
+            data = win.scope_viewer.layers[LIVE_LAYER].data
             if data is not last:
                 last, seen = data, seen + 1
             time.sleep(0.005)
@@ -120,10 +122,26 @@ def run(report: str | None = None, screenshot: str | None = None) -> int:
         frame = win.m.snap()
         win._on_snap(frame)
         state["frame"] = frame
-        names = [layer.name for layer in win.viewer.layers]
-        if not any(name.startswith("Capture") for name in names):
-            raise RuntimeError(f"pas de calque de capture ({names})")
-        return f"{frame.data.shape} {frame.data.dtype}, pixel {frame.metadata.pixel_size_um} µm"
+        wait(lambda: not win.gallery._reserved, 30)  # enregistrement en arrière-plan
+        info = win.gallery.entries()[0]
+        if not info.path.exists() or not info.thumbnail_path.exists():
+            raise RuntimeError(f"capture non enregistrée : {info.path}")
+        state["capture"] = info
+        size = info.path.stat().st_size // 1024
+        return (
+            f"{info.name} : {frame.data.shape} {frame.data.dtype}, {size} Ko, pixel {info.pixel_size_um} µm"
+        )
+
+    def open_in_analysis() -> str:
+        win = state["win"]
+        info = state["capture"]
+        win.open_capture(info, None)  # relue depuis le disque, comme le lendemain
+        if win.mode != "analyse" or info.name not in win.viewer.layers:
+            raise RuntimeError(f"image non ouverte dans Analyse ({win.mode})")
+        layer = win.viewer.layers[info.name]
+        if layer.metadata.get("pixel_size_um") != info.pixel_size_um:
+            raise RuntimeError("calibration perdue à la réouverture")
+        return f"espace {win.mode}, calque {info.name}, {layer.data.shape}"
 
     def analysis() -> str:
         from fuji.analysis import Image
@@ -151,6 +169,36 @@ def run(report: str | None = None, screenshot: str | None = None) -> int:
         if not np.array_equal(back, frame.data):
             raise RuntimeError("l'image relue diffère de l'image enregistrée")
         return f"{path.stat().st_size // 1024} Ko relus à l'identique"
+
+    def compositions() -> str:
+        """Profondeur de champ étendue et panorama, sur des images du microscope simulé
+        (vérifie aussi que les outils de calcul sont bien présents dans l'application)."""
+        from fuji.core import Microscope
+        from fuji.core.compose import FocusStacker, LiveMosaic
+
+        with Microscope.from_file("motorise-simulation") as scope:
+            scope.device("moteurs").link._io.speed = 3000
+            scope.apply_channel("Fond clair")
+            scope.camera.set_property("Épaisseur de l'échantillon", 40.0)
+            stack = FocusStacker()
+            for z in (-20.0, 0.0, 20.0):
+                scope.focus.move_to(z)
+                stack.add(scope.snap().data)
+            scope.camera.set_property("Épaisseur de l'échantillon", 0.0)
+            scope.focus.move_to(0.0)
+            mosaic = LiveMosaic()
+            try:
+                for x in (0.0, 0.0, 0.0, 40.0, 80.0, 120.0, 120.0, 120.0):
+                    scope.xy_stage.move_to(x, 0.0)
+                    mosaic.add(scope.snap().data)
+                image, _ = mosaic.render()
+            finally:
+                mosaic.close()
+        if stack.status.used < 2 or len(mosaic.tiles) != 2:
+            raise RuntimeError(f"{stack.status.used} images fusionnées, {len(mosaic.tiles)} champs")
+        return (
+            f"{stack.status.used} images fusionnées ; panorama de 2 champs {image.shape[1]}×{image.shape[0]}"
+        )
 
     def motors() -> str:
         from fuji.core import Microscope
@@ -224,11 +272,13 @@ def run(report: str | None = None, screenshot: str | None = None) -> int:
     if step("fenêtre", window) is not None:
         step("live", live)
         if step("capture", capture) is not None:
+            step("ouverture dans Analyse", open_in_analysis)
             step("analyse", analysis)
             step("enregistrement", files)
         step("affichage", display)
         if "absent" not in versions.get("mcp", "absent"):
             step("serveur pour IA", ai_server)
+    step("compositions en direct", compositions)
     step("moteurs simulés", motors)
 
     win = state.get("win")

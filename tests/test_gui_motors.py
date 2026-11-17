@@ -127,24 +127,25 @@ def test_mosaic_with_autofocus_from_the_acquisition_panel(window, qtbot, tmp_pat
     panel.af_range.setValue(24)
     panel.af_step.setValue(3)
     done, focus_used = [], []
-    panel.acquisition_done.disconnect(window._on_acq_done)  # pas de question « ouvrir ? »
+    # (plus de question « ouvrir ? » en fin d'acquisition : le résultat rejoint la liste des images)
     panel.acquisition_done.connect(done.append)
     panel.frame_ready.connect(lambda _event, frame: focus_used.append(frame.metadata.z_um))
     panel.start()
     assert window._acquiring
     qtbot.waitUntil(lambda: bool(done), timeout=120000)
-    window.topbar.set_acquisition(0, 0, False)
-    window._acquiring = False
-    window._set_hardware_controls_enabled(True)
+    assert not window._acquiring and window.quickbar.isEnabled()
     assert done[0].acquired == 4 and done[0].error is None
-    mosaics = [layer for layer in window.viewer.layers if layer.name.startswith("Mosaïque 2×2")]
-    assert len(mosaics) == 1
+    qtbot.waitUntil(lambda: not window.gallery._reserved, timeout=20000)
+    mosaics = [i for i in window.gallery.entries() if i.kind == "mosaique"]
+    assert len(mosaics) == 1 and mosaics[0].summary.startswith("Mosaïque 2×2")
+    assert mosaics[0].path.exists() and mosaics[0].pixel_size_um == pytest.approx(m.pixel_size_um())
     tile_h, tile_w = m.camera.sensor_shape()
-    height, width = mosaics[0].data.shape[:2]
+    height, width = mosaics[0].shape[:2]
     assert 1.7 * tile_h < height < 2 * tile_h and 1.7 * tile_w < width < 2 * tile_w
     assert len(focus_used) == 4 and max(abs(z) for z in focus_used) < 2.0  # mise au point retrouvée
     assert m.focus.get_position() == pytest.approx(6.0)  # réglages de départ rétablis à la fin
     assert list(tmp_path.glob("mosaique*"))
+    assert [i.kind for i in window.gallery.entries()].count("acquisition") == 4  # les 4 champs
 
 
 def _free_port() -> int:

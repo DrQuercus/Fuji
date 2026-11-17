@@ -4,26 +4,34 @@ Logiciel de microscopie qui réunit le meilleur de **Micro-Manager** (piloter le
 matériel), **napari** (afficher les images) et **Fiji/ImageJ** (analyser), dans une
 interface propre qui s'adapte au microscope.
 
-> Projet en développement (version 0.5, validée sur du matériel simulé). Voir
+> Projet en développement (version 0.6). Voir
 > [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) et [docs/FEUILLE_DE_ROUTE.md](docs/FEUILLE_DE_ROUTE.md).
 
-![Interface de Fuji : assistant Köhler sur le microscope simulé](docs/interface.png)
+![Interface de Fuji : espace Microscope, live sur le microscope simulé](docs/interface.png)
 
 ## L'interface
 
-- **Barre de navigation** à gauche : Contrôle, Assistants, Acquisition, Analyse,
-  Calques, Microscope (configuration), Réglages. Recliquer sur la section active
-  replie le panneau pour agrandir l'image.
-- **Barre rapide** sous l'image : exposition (curseur logarithmique + auto),
-  gain, objectif et canal en un clic, **histogramme en direct** avec alerte de
-  saturation.
-- **Barre supérieure** : choix du microscope (changement à chaud), Live, Capture,
-  mode expert, thème clair / sombre.
-- **Thèmes** : sombre ou clair, 7 couleurs d'accent, 3 tailles de texte
-  (Réglages → Apparence). Raccourcis : Ctrl+L live, Ctrl+K capture, Ctrl+1…7
-  sections, Ctrl+B replier le panneau, Ctrl+E modifier le microscope.
+Deux **espaces de travail**, choisis en haut de la fenêtre, chacun avec sa propre vue
+d'image pour ne pas mélanger prise de vue et analyse :
 
-![Thème clair, accent turquoise](docs/interface-clair.png)
+- **Microscope** : live, réglages (Contrôle), Assistants, Acquisition, Images prises,
+  configuration du microscope. La **barre rapide** sous l'image donne l'exposition, le
+  gain, l'objectif, le canal et l'**histogramme en direct** (alerte de saturation).
+- **Analyse** : les images qu'on y ouvre, les **outils** (ROI, opérations, mesures),
+  les calques et les résultats. Le live s'y met en pause et reprend au retour.
+
+Chaque capture (bouton **Capturer**, Ctrl+K) est **enregistrée automatiquement** dans
+`~/Fuji/Captures/<date>` et rejoint la liste **Images**, commune aux deux espaces : un
+double-clic l'ouvre dans Analyse. On peut y renommer ou supprimer les images.
+
+![Liste des images prises](docs/images-prises.png)
+
+La fenêtre tient sur un petit écran : la barre rapide passe sur deux lignes et la barre
+du haut se compacte (largeur minimale ≈ 750 pixels). Thèmes sombre ou clair, 7 couleurs
+d'accent, 3 tailles de texte. Raccourcis : Ctrl+1 Microscope, Ctrl+2 Analyse, Ctrl+3
+Images, Ctrl+L live, Ctrl+K capture, Ctrl+B replier le panneau.
+
+![Espace Analyse : mesure d'une ROI](docs/analyse.png)
 
 ## Configurer un microscope
 
@@ -49,6 +57,10 @@ simulé, vide, copie de l'actuel). L'éditeur couvre **tout** le profil :
 
 ## Ce que Fuji sait déjà faire
 
+- **Images composées en direct, à la main** : **profondeur de champ étendue** (on tourne
+  la mise au point, l'image nette partout se construit) et **panorama** (on déplace la
+  lame, les champs s'assemblent). Aucun moteur nécessaire. Voir
+  [docs/EN_DIRECT.md](docs/EN_DIRECT.md).
 - **Piloter un microscope manuel** (Leitz Diaplan) comme un microscope motorisé :
   objectifs, lampe et mise au point sont déclarés ; quand un protocole a besoin d'un
   changement, Fuji affiche une consigne (« Placez l'objectif 40x ») et attend.
