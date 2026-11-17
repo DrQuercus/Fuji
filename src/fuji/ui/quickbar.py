@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import numpy as np
 from qtpy.QtCore import Qt, QTimer, Signal
@@ -10,7 +11,7 @@ from qtpy.QtWidgets import QDoubleSpinBox, QHBoxLayout, QLayout, QSizePolicy, QS
 
 from fuji.core.microscope import Microscope
 
-from .components import button, choice, label, section_title
+from .components import button, choice, section_title
 from .flow import FlowLayout
 from .histogram import HistogramWidget
 
@@ -118,7 +119,6 @@ class QuickBar(QWidget):
         self.histogram.setMinimumWidth(180)
         self.histogram.setMaximumWidth(360)
         lay.addWidget(self.histogram, stretch=2)
-        self.pixel_label = label("", "hint", wrap=False)
 
         self._timer = QTimer(self)
         self._timer.setInterval(400)
@@ -166,14 +166,7 @@ class QuickBar(QWidget):
         self._sync_slider(value)
 
     def auto_exposure(self) -> None:
-        cam = self.m.require_camera()
-        try:
-            cam.auto_expose()
-        except Exception as exc:
-            self.message.emit(f"Exposition automatique impossible : {exc}")
-            return
-        self.message.emit(f"Exposition réglée à {cam.get_exposure():.1f} ms")
-        self.refresh()
+        auto_expose_async(self.m, self.message.emit, self.refresh, self)
 
     # ------------------------------------------------------------- optique
     def _objective_clicked(self, short: str) -> None:
@@ -216,3 +209,32 @@ class QuickBar(QWidget):
             self.objectives.set_value(self._obj_short.get(self.m.objective_changer.get_label()))
         if hasattr(self, "channels"):
             self.channels.set_value(self.m.channel)
+
+
+def auto_expose_async(microscope: Microscope, message: Any, done: Any, owner: QWidget) -> None:
+    """Exposition automatique sans figer l'interface : la caméra prend plusieurs images
+    (jusqu'à seize poses), dans un fil de travail. Un seul réglage à la fois."""
+    from superqt.utils import create_worker
+
+    cam = microscope.camera
+    if cam is None or getattr(microscope, "_auto_exposing", False):
+        return
+    microscope._auto_exposing = True  # type: ignore[attr-defined]
+    message("Exposition automatique…")
+    worker = create_worker(cam.auto_expose, _start_thread=False, _ignore_errors=True)
+
+    def finished() -> None:
+        microscope._auto_exposing = False  # type: ignore[attr-defined]
+
+    def returned(value: float) -> None:
+        message(f"Exposition réglée à {value:.1f} ms")
+        try:
+            done()
+        except RuntimeError:  # panneau détruit entre-temps
+            pass
+
+    worker.returned.connect(returned)
+    worker.errored.connect(lambda exc: message(f"Exposition automatique impossible : {exc}"))
+    worker.finished.connect(finished)
+    owner._auto_worker = worker  # type: ignore[attr-defined]  # garde une référence
+    worker.start()

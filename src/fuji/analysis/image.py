@@ -169,10 +169,6 @@ class Labels:
         return "µm" if self.pixel_size_um else "px"
 
 
-#: Types de ROI (noms des formes de napari).
-ROI_KINDS = ("rectangle", "ellipse", "polygon", "line", "path")
-
-
 @dataclass
 class Rois:
     """Régions d'intérêt : rectangles, ellipses, polygones, lignes et tracés.

@@ -44,12 +44,14 @@ class FlatFieldWidget(QWidget):
         self.enable.toggled.connect(self._toggled)
         self.take_btn = button(
             "Prendre la référence",
-            "camera",
+            None,
             tooltip="Sur une zone VIDE de la lame, nette et bien éclairée (histogramme vers le "
             f"milieu, rien de saturé). Moyenne de {DEFAULT_FRAMES} images.",
         )
         self.take_btn.clicked.connect(lambda: self.take("flat"))
         self.more_btn = icon_button("gear", "Noir, effacer la référence")
+        self.more_btn.setFixedWidth(34)
+        self.more_btn.setStyleSheet("QPushButton::menu-indicator { image: none; width: 0px; }")
         menu = QMenu(self.more_btn)
         menu.addAction("Prendre le noir (lumière coupée)…", lambda: self.take("dark"))
         self.clear_action = menu.addAction("Effacer cette référence", self.clear)

@@ -4,7 +4,7 @@ Logiciel de microscopie qui réunit le meilleur de **Micro-Manager** (piloter le
 matériel), **napari** (afficher les images) et **Fiji/ImageJ** (analyser), dans une
 interface propre qui s'adapte au microscope.
 
-> Projet en développement (version 0.8.1). Voir
+> Projet en développement (version 0.9). Voir
 > [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) et [docs/FEUILLE_DE_ROUTE.md](docs/FEUILLE_DE_ROUTE.md).
 
 ![Interface de Fuji : espace Microscope, live sur le microscope simulé](docs/interface.png)
@@ -98,7 +98,7 @@ simulé, vide, copie de l'actuel). L'éditeur couvre **tout** le profil :
   [docs/EN_DIRECT.md](docs/EN_DIRECT.md).
 - **Piloter un microscope manuel** (Leitz Diaplan) comme un microscope motorisé :
   objectifs, lampe et mise au point sont déclarés ; quand un protocole a besoin d'un
-  changement, Fuji affiche une consigne (« Placez l'objectif 40x ») et attend.
+  changement, Fuji affiche une consigne (« Mettez en place « 40x/0.65 » ») et attend.
 - **Caméras ToupTek** via le SDK officiel (live, capture par déclenchement logiciel,
   12 bits, balance des blancs, réglages du capteur).
 - **Tous les microscopes Micro-Manager** (~250 périphériques) avec une seule ligne de
@@ -107,7 +107,10 @@ simulé, vide, copie de l'actuel). L'éditeur couvre **tout** le profil :
   diaphragme de champ et un condenseur mal réglés, pour s'entraîner au Köhler).
 - **Assistants** : alignement de Köhler guidé, aide à la mise au point, calibration
   automatique de la taille du pixel avec un micromètre objet, uniformité de
-  l'éclairage, correction de champ plat.
+  l'éclairage.
+- **Image de référence** (champ plat) : sur une zone vide de la lame, « Prendre la
+  référence » ; le fond devient uniforme dès le live — coins sombres et poussières
+  disparaissent des captures, des panoramas et des acquisitions.
 - **L'essentiel d'ImageJ, intégré** : 76 opérations recodées avec les formules d'ImageJ —
   types d'image, filtres, soustraction de fond, calculs entre images, les 17 seuillages
   automatiques et les seuillages locaux, binaire, piles (projection, montage, recalage),
@@ -265,13 +268,15 @@ profils fournis.
 ## État de validation
 
 Le code a été entièrement relu et chaque défaut corrigé est couvert par un test
-(environ 240 tests, lancés à chaque modification sous Linux **et sur macOS**). L'application
+(environ 290 tests, lancés à chaque modification sous Linux **et sur macOS**). L'application
 Mac est construite puis essayée automatiquement sur des Mac de GitHub (processeurs Apple
 et Intel) avant d'être proposée au téléchargement.
 
-Tout cela tourne sur du **matériel simulé** : la vraie caméra ToupTek, de vrais moteurs,
-une vraie conversation avec une IA et la comparaison directe avec ImageJ restent à
-valider — voir [la feuille de route](docs/FEUILLE_DE_ROUTE.md).
+Tout cela tourne sur du **matériel simulé**. La vraie caméra ToupTek se connecte et envoie
+ses images (essai sur Mac) ; le panorama, la profondeur de champ étendue et l'image de
+référence sont réglés sur un banc qui imite une main, pas encore sur le vrai microscope.
+De vrais moteurs, une vraie conversation avec une IA et la comparaison directe avec ImageJ
+restent à valider — voir [la feuille de route](docs/FEUILLE_DE_ROUTE.md).
 
 Les fonctions d'ImageJ recodées sont vérifiées contre les formules d'ImageJ, pas encore
 contre ImageJ lui-même : le test `tests/test_imagej_parity.py` fait cette comparaison sur

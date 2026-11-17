@@ -13,7 +13,7 @@ from ..registry import Param, operation
 
 _EIGHT = np.ones((3, 3), bool)
 _NEIGHBOURS = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], np.int32)
-_Iterations = Annotated[int, Param(label="itérations", min=1, max=100)]
+_Iterations = Annotated[int, Param(label="nombre de passes", min=1, max=100)]
 _Count = Annotated[
     int,
     Param(

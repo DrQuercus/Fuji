@@ -14,8 +14,8 @@ voisinages, conversions de type, définitions des mesures).
 | Menus Process / Analyze / Image | les outils rangés **par tâche** (« Améliorer l'image », « Isoler les objets », « Compter et mesurer »…), dans le panneau **Outils** et dans le menu **Analyse** ; chaque fiche indique la commande ImageJ correspondante |
 | Barre d'outils : rectangle, ovale, polygone, ligne, points | les mêmes outils, en haut du panneau **Outils** (« Dessiner : ») |
 | ROI Manager | le calque « ROI » : chaque forme est une région, modifiable et supprimable |
-| `M` (Measure) | **Analyse → Mesurer** (`Ctrl+M`) : les ROI dessinées, sinon l'image entière |
-| `H` (Histogram) | **Analyse → Histogramme** (`Ctrl+H`) |
+| `M` (Measure) | **Analyse → Mesurer** (`Ctrl+M` ; sur Mac `⌘⇧M`) : les ROI dessinées, sinon l'image entière |
+| `H` (Histogram) | **Analyse → Histogramme** (`Ctrl+H` ; sur Mac `⌘⇧H`) |
 | `K` (Plot Profile) | **Analyse → Profil d'intensité** (`Ctrl+Maj+K`) sur la ligne tracée |
 | Case « Preview » des filtres | case **Aperçu en direct** |
 | « Process all slices ? » | case **Toute la pile** |
@@ -219,7 +219,8 @@ Fuji garde le pont vers Fiji (opérations « Macro ImageJ » et « Commande Imag
 
 - formats propriétaires (Zeiss .czi, Leica .lif, Nikon .nd2...) : lus par Bio-Formats ;
 - suivi d'objets dans le temps (TrackMate), kymographes ;
-- assemblage de mosaïques (Stitching) ;
+- assemblage de mosaïques à partir de fichiers déjà enregistrés (Stitching) — les panoramas
+  et les mosaïques pris avec Fuji sont assemblés par Fuji ;
 - 3D : rendu en volume, comptage d'objets 3D, déconvolution ;
 - segmentation par apprentissage (Weka, StarDist, Cellpose) ;
 - macros et traitement par lots d'un dossier (prévu dans Fuji : voir la feuille de route) ;

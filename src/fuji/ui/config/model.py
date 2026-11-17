@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from fuji.core.profile import MicroscopeProfile, is_builtin_profile, user_profile_dir
-from fuji.drivers import DriverInfo, driver_info
+from fuji.drivers import driver_info
 
 ROLE_KINDS = {
     "camera": "camera",
@@ -312,7 +312,3 @@ def save_path_for(data: dict[str, Any], current: Path | None) -> Path:
         path = folder / f"{base}-{i}.yaml"
         i += 1
     return path
-
-
-def info_or_none(driver: str) -> DriverInfo | None:
-    return driver_info(driver)

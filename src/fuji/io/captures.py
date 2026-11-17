@@ -21,6 +21,8 @@ from typing import Any
 
 import numpy as np
 
+from fuji.core.frame import is_rgb
+
 from .ome_tiff import save_image
 
 #: dossier des vignettes et des résumés, à côté des images
@@ -49,7 +51,7 @@ def thumbnail(data: np.ndarray, side: int = THUMB_SIDE) -> np.ndarray:
     """Vignette 8 bits (contraste étalé), plus grand côté ≤ ``side`` : quelques millisecondes,
     même pour une image 4K (sous-échantillonnage, pas de calcul sur l'image entière)."""
     a = np.asarray(data)
-    rgb = a.ndim == 3 and a.shape[-1] in (3, 4)
+    rgb = is_rgb(a)
     while a.ndim > (3 if rgb else 2):  # pile : plan du milieu
         a = a[a.shape[0] // 2]
     if rgb:

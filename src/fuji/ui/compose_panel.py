@@ -26,6 +26,7 @@ from qtpy.QtWidgets import QProgressBar, QStackedWidget, QVBoxLayout, QWidget
 from superqt.utils import create_worker
 
 from fuji.core.compose import FocusStacker, LiveMosaic
+from fuji.core.frame import is_rgb
 from fuji.core.microscope import Microscope
 
 from .components import Card, button, hbox, hint, label
@@ -425,7 +426,7 @@ class ComposePanel(QWidget):
         if image is None:
             return
         step = update["step"]
-        rgb = image.ndim == 3 and image.shape[-1] in (3, 4)
+        rgb = is_rgb(image)
         if COMPOSITION_LAYER in self.viewer.layers:
             layer = self.viewer.layers[COMPOSITION_LAYER]
             if layer.data.shape == image.shape:
@@ -496,7 +497,7 @@ class ComposePanel(QWidget):
                 layer = self.viewer.add_image(
                     canvas,
                     name=COMPOSITION_LAYER,
-                    rgb=canvas.ndim == 3 and canvas.shape[-1] in (3, 4),
+                    rgb=is_rgb(canvas),
                     scale=scale,
                     translate=translate,
                     units=units_for(self._px),

@@ -52,14 +52,14 @@ xattr -dr com.apple.quarantine /Applications/Fuji.app
 Le pilote du fabricant n'est pas inclus dans Fuji (sa licence ne le permet pas). Une fois :
 
 1. Télécharger « ToupTek SDK » (`toupcamsdk.zip`) sur le site de ToupTek.
-2. Dans Fuji : **Réglages → Caméras ToupTek → Installer le SDK…** et choisir le fichier.
+2. Dans Fuji : **Préférences → Caméras ToupTek → Installer le SDK…** et choisir le fichier.
 3. Choisir le microscope « Leitz Diaplan + ToupTek » dans la barre du haut.
 
 ## Où sont mes fichiers ?
 
 | Quoi | Où |
 |---|---|
-| Images prises (captures, panoramas…) | `~/Fuji/Captures/<date>` (modifiable dans la liste « Images ») |
+| Images (captures, panoramas…) | `~/Fuji/Captures/<date>` (modifiable dans la liste « Images ») |
 | Profils de microscope, calibrations | `~/.fuji/` (dossier caché de ton dossier personnel) |
 | Fichiers produits par un assistant IA | `~/Fuji/ia/` |
 | Journal des erreurs (utile si quelque chose ne marche pas) | `~/.fuji/fuji.log` |

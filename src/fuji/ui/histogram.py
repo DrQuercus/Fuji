@@ -103,7 +103,3 @@ class HistogramWidget(QWidget):
                     "log" if self.log_scale else "lin",
                 )
         painter.end()
-
-    @property
-    def saturated_percent(self) -> float:
-        return self._saturated

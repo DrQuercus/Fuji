@@ -56,13 +56,14 @@ gratuit mais n'est pas redistribuable : chacun le télécharge chez ToupTek.
 ## Conseils pour mesurer
 
 Pour des mesures d'intensité fiables, désactiver les « embellissements » de la caméra
-(panneau Propriétés, mode expert) :
+(Contrôle → Réglages avancés, mode expert) :
 
 - **Gamma = 100** (réponse linéaire),
 - **Contraste = 0**, **Luminosité = 0**,
 - **12 bits**,
 - exposition automatique **désactivée** (Fuji la désactive au démarrage),
-- correction de champ plat (assistant « Éclairage »).
+- image de référence, pour un fond uniforme dès le live (Contrôle → Caméra → « Prendre la
+  référence » ; voir [EN_DIRECT.md](EN_DIRECT.md)).
 
 ## Dépannage
 
@@ -78,9 +79,10 @@ Pour des mesures d'intensité fiables, désactiver les « embellissements » de 
 
 Le pilote a été écrit d'après l'API du SDK et testé avec un **SDK simulé**
 (`tests/fake_toupcam.py`) : format des lignes, 8/12 bits, déclenchement, live,
-réglages, images en retard, échec de déclenchement, débranchement. Il reste à le
-valider avec la vraie caméra : `fuji touptek info` et
-`fuji -p leitz-diaplan-touptek snap` donnent les informations utiles en cas de souci.
+réglages, images en retard, échec de déclenchement, débranchement. Avec la vraie caméra
+(E3ISPM08300KPD, sur Mac), la connexion et le live fonctionnent ; le reste de la liste
+ci-dessous est encore à vérifier. En cas de souci, `fuji touptek info` et
+`fuji -p leitz-diaplan-touptek snap` donnent les informations utiles.
 
 Points à regarder en premier avec la vraie caméra :
 

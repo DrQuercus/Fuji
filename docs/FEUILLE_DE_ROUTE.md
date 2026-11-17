@@ -170,16 +170,50 @@ restait quand on en ouvrait une autre.
 - [x] Supprimer une image de la liste la ferme aussi dans Analyse ; la renommer renomme
       l'image ouverte (avant, la rouvrir créait un doublon)
 
+## Version 0.9 (fait) — comme le logiciel de la caméra, et un tour du code
+
+Retour d'essai : le panorama et la profondeur de champ étendue à la main étaient peu
+pratiques, et l'image de référence fonctionnait mal ; ceux du logiciel ToupTek sont meilleurs.
+
+- [x] **Image de référence** refaite : la correction se fait à la sortie de la caméra, donc
+      **le live est corrigé** (avant : seulement les captures, et le fichier était relu à
+      chaque image — plus d'une demi-seconde en 4K, ce qui ralentissait aussi le panorama).
+      Commandes dans Contrôle → Caméra ; moyenne de 16 images ; refus d'une référence saturée
+      ou trop sombre, alerte si un échantillon est dans le champ ; 15 ms par image 4K
+- [x] **Panorama en continu** : plus besoin de s'arrêter sur chaque champ. L'ancien attendait
+      une immobilité parfaite que la main n'atteint jamais (2 champs posés sur tout un
+      parcours, sur le banc d'essai). Flou de bougé estimé (net / un peu vite / trop vite),
+      zones floues remplacées quand on repasse lentement, poussières fixes retirées du suivi,
+      éclairage inégal compensé, raccords plus nets, progression de l'assemblage
+- [x] **Profondeur de champ étendue** : on ne reste plus bloqué sur « la lame a bougé » ; un
+      fond vide ne scintille plus ; plus de halo flou autour des objets ; 2,5 fois plus rapide
+      en 4K ; le live reste visible en vignette
+- [x] Compositions : état écrit **sur l'image**, cadre coloré, vue qui suit le panorama,
+      « Recommencer », menu Microscope (Ctrl+Shift+P, Ctrl+Shift+D)
+- [x] **Banc d'essai** qui imite une main (mouvement continu, tremblement, flou de bougé,
+      poussières, bruit, images 4K), pour ne plus régler ces outils à l'aveugle
+- [x] **Tour du code** (deux relectures complètes, code puis libellés) — corrigé :
+      boutons de mode des calques et clic droit sur la liste des calques (ils levaient une
+      erreur à chaque clic) ; fichier glissé sur la fenêtre ; centrage par double-clic
+      (platine motorisée), jamais déclenché ; images d'une acquisition cachées sous le live ;
+      « Exécuter » ignoré pendant un aperçu ; messages effacés par les coordonnées de la
+      souris ; caméra débranchée signalée ; exposition automatique hors du fil de l'interface ;
+      même affichage d'une image ouverte depuis la mémoire ou le disque
+- [x] Libellés harmonisés : « Images », « Outils », « Contrôle », « Configuration »,
+      « Préférences » ; boutons Oui / Non / Annuler en français ; réglages des outils en
+      français (« rayon du flou », « tolérance »…) ; messages d'erreur qui disent quoi faire ;
+      vouvoiement partout ; sur Mac, Mesurer et Histogramme ne prennent plus ⌘M et ⌘H
+
 ## Prochaines étapes
 
 ### 1. Valider sur ton matériel (priorité)
 
-Tout ce qui précède est vérifié par environ 270 tests automatiques, mais **sur du
+Tout ce qui précède est vérifié par environ 290 tests automatiques, mais **sur du
 matériel simulé**. Voici ce qui n'a jamais pu être essayé et reste à valider :
 
 - [x] **La vraie caméra** : la E3ISPM08300KPD se connecte et l'image arrive (Mac)
-- [ ] Profondeur de champ étendue et panorama sur de vraies lames (réglages de netteté et
-      de suivi à confirmer en 4K)
+- [ ] Image de référence, panorama et profondeur de champ étendue (refaits en 0.9) sur de
+      vraies lames : vitesse permise, seuil de bruit, fidélité des couleurs, fluidité en 4K
 - [ ] Vérifier l'alignement des valeurs 12 bits (0–4095 attendu) et l'ordre RGB
 - [ ] Vérifier qu'une capture pendant le live donne bien une image nette et récente
 - [x] **macOS** : les tests de l'interface et l'essai de l'application empaquetée
@@ -213,7 +247,7 @@ matériel simulé**. Voici ce qui n'a jamais pu être essayé et reste à valide
 
 ### 4. Analyse avancée
 - [ ] Segmentation par apprentissage (Cellpose, StarDist)
-- [ ] Suivi d'objets dans le temps, colocalisation
+- [ ] Suivi d'objets dans le temps
 - [ ] Gestionnaire de ROI compatible avec le ROI Manager d'ImageJ
 
 ### 5. Motorisation et grandes acquisitions

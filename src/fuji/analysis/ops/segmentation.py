@@ -47,15 +47,15 @@ def auto_threshold(
     image: Image,
     method: Annotated[_Method, Param(label="méthode")] = "Default",
     objects: Annotated[
-        Literal["claires", "sombres"],
+        Literal["clairs", "sombres"],
         Param(label="objets", description="sombres : cellules sur fond clair (fond clair)"),
-    ] = "claires",
+    ] = "clairs",
 ) -> Labels:
     """Masque binaire des objets, avec les 17 méthodes d'ImageJ (mêmes noms, mêmes niveaux).
 
-    « claires » correspond à la case « Dark background » d'ImageJ."""
+    « clairs » correspond à la case « Dark background » d'ImageJ."""
     values = _gray_values(image)
-    lower, upper = threshold_range(values, method, dark_background=objects == "claires")
+    lower, upper = threshold_range(values, method, dark_background=objects == "clairs")
     mask = (values >= lower) & (values <= upper)
     return Labels(
         mask.astype(np.uint8),
@@ -82,7 +82,7 @@ def local_threshold_op(
     image: Image,
     method: Annotated[_LocalMethod, Param(label="méthode")] = "Phansalkar",
     radius: Annotated[float, Param(label="rayon", min=1, max=200, unit="px")] = 15.0,
-    objects: Annotated[Literal["claires", "sombres"], Param(label="objets")] = "claires",
+    objects: Annotated[Literal["clairs", "sombres"], Param(label="objets")] = "clairs",
     param1: Annotated[
         float,
         Param(
@@ -99,7 +99,7 @@ def local_threshold_op(
     """Seuil calculé pour chaque pixel d'après son voisinage : utile quand l'éclairage est
     inégal ou le contraste variable. L'image est d'abord ramenée à 8 bits, comme dans Fiji."""
     mask = local_threshold(
-        _gray_values(image), method, radius, param1, param2, bright_objects=objects == "claires"
+        _gray_values(image), method, radius, param1, param2, bright_objects=objects == "clairs"
     )
     return Labels(mask.astype(np.uint8), image.pixel_size_um, f"{image.name} (masque local {method})")
 
@@ -121,7 +121,7 @@ _SQUARE = np.ones((3, 3), bool)  # voisinage 3×3 des opérations binaires d'Ima
 
 @operation("Ouverture", category="Binaire", imagej="Process > Binary > Open")
 def binary_open(
-    mask: Labels, iterations: Annotated[int, Param(label="itérations", min=1, max=50)] = 1
+    mask: Labels, iterations: Annotated[int, Param(label="nombre de passes", min=1, max=50)] = 1
 ) -> Labels:
     """Érosion puis dilatation (3×3, répétées) : supprime les petits détails clairs.
     Comme ImageJ par défaut, le bord de l'image compte comme du fond."""
@@ -131,7 +131,7 @@ def binary_open(
 
 @operation("Fermeture", category="Binaire", imagej="Process > Binary > Close-")
 def binary_close(
-    mask: Labels, iterations: Annotated[int, Param(label="itérations", min=1, max=50)] = 1
+    mask: Labels, iterations: Annotated[int, Param(label="nombre de passes", min=1, max=50)] = 1
 ) -> Labels:
     """Dilatation puis érosion (3×3, répétées) : bouche les petits trous et fissures."""
     out = ndi.binary_closing(_as_mask(mask), structure=_SQUARE, iterations=iterations)
@@ -141,7 +141,7 @@ def binary_close(
 @operation("Retirer les petits objets", category="Binaire")
 def remove_small(
     mask: Labels,
-    min_area: Annotated[float, Param(min=0, unit="µm² (ou px²)")] = 10.0,
+    min_area: Annotated[float, Param(min=0, unit="µm² ou px²")] = 10.0,
 ) -> Labels:
     """Supprime les objets dont la surface est inférieure à ``min_area``."""
     lab, _ = ndi.label(_as_mask(mask), structure=np.ones((3, 3)))

@@ -51,6 +51,25 @@ class Param:
     multiline: bool = False
 
 
+#: Noms français des réglages courants (quand l'opération n'en donne pas).
+DEFAULT_LABELS = {
+    "angle": "angle",
+    "command": "commande (nom du menu ImageJ)",
+    "interpolation": "lissage (interpolation)",
+    "macro": "texte de la macro",
+    "method": "méthode",
+    "min_area": "surface minimale",
+    "options": "options",
+    "radius": "rayon",
+    "sigma": "rayon du flou",
+    "tolerance": "tolérance",
+    "threshold": "seuil",
+    "iterations": "nombre de passes",
+    "width": "largeur",
+    "height": "hauteur",
+}
+
+
 @dataclass(frozen=True)
 class ParamSpec:
     name: str
@@ -60,7 +79,9 @@ class ParamSpec:
 
     @property
     def label(self) -> str:
-        return self.meta.label or self.name.replace("_", " ")
+        """Nom affiché du réglage : celui donné par l'opération, sinon un nom français pour
+        les réglages courants, sinon le nom Python."""
+        return self.meta.label or DEFAULT_LABELS.get(self.name) or self.name.replace("_", " ")
 
 
 @dataclass(frozen=True)

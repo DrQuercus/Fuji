@@ -42,8 +42,11 @@ def install_error_handler() -> None:
             box = QMessageBox(app.activeWindow())
             box.setIcon(QMessageBox.Icon.Warning)
             box.setWindowTitle("Erreur")
-            box.setText(f"{exc_type.__name__} : {exc}")
-            box.setInformativeText("Fuji continue de fonctionner. Détails ci-dessous.")
+            box.setText("Une erreur inattendue s'est produite.")
+            box.setInformativeText(
+                f"{exc}\n\nFuji continue de fonctionner. Si elle revient, envoyez le fichier "
+                "~/.fuji/fuji.log (les détails sont aussi ci-dessous)."
+            )
             box.setDetailedText(text)
             box.show()
         except Exception:  # pragma: no cover - affichage impossible
@@ -51,6 +54,24 @@ def install_error_handler() -> None:
 
     hook._fuji = True  # type: ignore[attr-defined]
     sys.excepthook = hook
+
+
+def install_french(app: QApplication) -> None:
+    """Boutons et dialogues standard de Qt en français (« Oui », « Non », « Annuler »…)."""
+    from qtpy.QtCore import QLibraryInfo, QLocale, QTranslator
+
+    if getattr(app, "_fuji_translator", None) is not None:
+        return
+    translator = QTranslator(app)
+    try:
+        folder = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+    except AttributeError:  # Qt 5
+        folder = QLibraryInfo.location(QLibraryInfo.TranslationsPath)  # type: ignore[attr-defined]
+    if translator.load(QLocale(QLocale.Language.French), "qtbase", "_", folder):
+        app.installTranslator(translator)
+        app._fuji_translator = translator  # type: ignore[attr-defined]
+    else:
+        log.info("Traduction française de Qt introuvable dans %s", folder)
 
 
 def isolate_settings(folder: str) -> None:
@@ -72,6 +93,7 @@ def create_window(profile: str | None = None):  # type: ignore[no-untyped-def]
     from .main_window import MainWindow
 
     app = QApplication.instance() or QApplication(sys.argv)
+    install_french(app)
     app.setApplicationName("Fuji")
     app.setOrganizationName("Fuji")
     _style(app)  # type: ignore[arg-type]

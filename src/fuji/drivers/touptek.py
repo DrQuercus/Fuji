@@ -61,8 +61,8 @@ def load_toupcam(sdk_path: str | Path | None = None) -> ModuleType:
     if not module_file.exists():
         raise ToupTekSDKNotFound(
             f"SDK ToupTek introuvable dans {path}.\n"
-            "Télécharge le SDK sur le site de ToupTek puis lance :\n"
-            "    fuji touptek install /chemin/vers/toupcamsdk.zip"
+            "Téléchargez le SDK sur le site de ToupTek, puis : Préférences → Caméras ToupTek → "
+            "« Installer le SDK… » (ou, dans un terminal : fuji touptek install /chemin/vers/toupcamsdk.zip)"
         )
     if "toupcam" in sys.modules and getattr(sys.modules["toupcam"], "__file__", None) == str(module_file):
         return sys.modules["toupcam"]

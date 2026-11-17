@@ -20,11 +20,6 @@ import numpy as np
 from scipy import ndimage as ndi
 
 
-def java_round(values: np.ndarray | float) -> np.ndarray:
-    """``(int)(v + 0.5)`` pour des valeurs positives ; ``Math.round`` de Java."""
-    return np.floor(np.asarray(values, dtype=np.float64) + 0.5)
-
-
 def restore_dtype(out: np.ndarray, like: np.ndarray | np.dtype) -> np.ndarray:
     """Revient au type d'origine : arrondi d'ImageJ et saturation aux bornes du type."""
     dtype = like.dtype if isinstance(like, np.ndarray) else np.dtype(like)

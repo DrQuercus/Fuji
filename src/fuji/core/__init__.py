@@ -10,7 +10,7 @@ from .devices import (
     StateDevice,
     XYStage,
 )
-from .frame import Frame, FrameMetadata
+from .frame import Frame, FrameMetadata, is_rgb
 from .manual import (
     ManualAction,
     ManualActionDeclined,
@@ -47,4 +47,5 @@ __all__ = [
     "Shutter",
     "StateDevice",
     "XYStage",
+    "is_rgb",
 ]

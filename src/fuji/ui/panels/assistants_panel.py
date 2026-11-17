@@ -234,7 +234,7 @@ class FocusWidget(_LiveAssistant):
         reset = QPushButton("Oublier le meilleur")
         reset.clicked.connect(self.tracker.reset)
         lay.addWidget(reset)
-        self.peaking = QCheckBox("Surligner les zones nettes (focus peaking)")
+        self.peaking = QCheckBox("Surligner les zones nettes")
         self.peaking.toggled.connect(lambda on: None if on else self._remove_peaking())
         lay.addWidget(self.peaking)
         self._af_was_live = False

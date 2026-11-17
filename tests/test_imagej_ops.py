@@ -145,7 +145,7 @@ def test_threshold_is_applied_like_imagej():
     level = threshold_level(hist, "Otsu")
     assert threshold_range(img, "Otsu", dark_background=True) == (level + 1, 255)
     assert threshold_range(img, "Otsu", dark_background=False) == (0, level)
-    bright = run("Seuillage automatique", Image(img), method="Otsu", objects="claires").data
+    bright = run("Seuillage automatique", Image(img), method="Otsu", objects="clairs").data
     dark = run("Seuillage automatique", Image(img), method="Otsu", objects="sombres").data
     assert (bright == (img > level)).all() and (dark == (img <= level)).all()
     # 16 bits : passage par 8 bits, puis min + niveau / 255 × (max − min)

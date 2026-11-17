@@ -192,8 +192,10 @@ def _units(unit: str, intensity: bool) -> dict[str, str]:
 def analyze_particles(
     mask: Labels,
     intensity: Image | None = None,
-    min_area_um2: Annotated[float, Param(label="surface min", min=0, unit="µm² (px² si non calibré)")] = 0.0,
-    max_area_um2: Annotated[float, Param(label="surface max", min=0, description="0 = pas de limite")] = 0.0,
+    min_area_um2: Annotated[float, Param(label="surface minimale", min=0, unit="µm² ou px²")] = 0.0,
+    max_area_um2: Annotated[
+        float, Param(label="surface maximale", min=0, unit="µm² ou px²", description="0 = pas de limite")
+    ] = 0.0,
     min_circularity: Annotated[float, Param(label="circularité min", min=0, max=1, step=0.05)] = 0.0,
     max_circularity: Annotated[float, Param(label="circularité max", min=0, max=1, step=0.05)] = 1.0,
     exclude_edges: Annotated[bool, Param(label="exclure les bords")] = False,

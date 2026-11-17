@@ -549,7 +549,7 @@ def nav_button(text: str, icon_name: str) -> QToolButton:
     b.setIconSize(QSize(22, 22))
     b.setCheckable(True)
     b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
-    b.setFixedSize(68, 58)
+    b.setFixedSize(74, 58)
     b.setCursor(Qt.CursorShape.PointingHandCursor)
     b.setProperty("icon_name", icon_name)
     return b

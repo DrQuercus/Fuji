@@ -410,10 +410,14 @@ class DisplayBar(QWidget):
     def _target(self) -> ImageLayer | None:
         """L'image réglée : le calque actif si c'est une image, sinon l'image du dessus."""
         active = self.viewer.layers.selection.active
-        if isinstance(active, ImageLayer) and not active.name.startswith("Aperçu — "):
+        if isinstance(active, ImageLayer) and not active.name.startswith(documents.PREVIEW_PREFIX):
             return active
         for layer in reversed(self.viewer.layers):
-            if isinstance(layer, ImageLayer) and layer.visible and not layer.name.startswith("Aperçu — "):
+            if (
+                isinstance(layer, ImageLayer)
+                and layer.visible
+                and not layer.name.startswith(documents.PREVIEW_PREFIX)
+            ):
                 return layer
         return None
 

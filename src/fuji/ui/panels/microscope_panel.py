@@ -27,6 +27,7 @@ from qtpy.QtWidgets import (
 from fuji.core.devices import LightSource
 from fuji.core.microscope import Microscope
 
+from ..components import icon_button
 from ..flatfield_widget import FlatFieldWidget
 from ..widgets import hint_label, row, section
 
@@ -143,14 +144,9 @@ class MicroscopePanel(QWidget):
         self.exposure.setValue(round(value, 2))
 
     def _auto_exposure(self) -> None:
-        cam = self.m.require_camera()
-        try:
-            cam.auto_expose()
-        except Exception as exc:
-            self.message.emit(f"Exposition automatique impossible : {exc}")
-            return
-        self.message.emit(f"Exposition réglée à {cam.get_exposure():.1f} ms")
-        self.refresh()
+        from ..quickbar import auto_expose_async
+
+        auto_expose_async(self.m, self.message.emit, self.refresh, self)
 
     def _white_balance(self) -> None:
         cam = self.m.require_camera()
@@ -191,8 +187,8 @@ class MicroscopePanel(QWidget):
             _compact_combo(self.channel, 8)
             if m.channel:
                 self.channel.setCurrentText(m.channel)
-            apply = QPushButton("OK")
-            apply.setToolTip("Appliquer ce canal : règle cubes, lampes et exposition")
+            apply = icon_button("check", "Appliquer ce canal : règle cubes, lampes et exposition")
+            apply.setFixedWidth(34)
             apply.clicked.connect(lambda: self._apply_channel(self.channel.currentText()))
             grid.addWidget(QLabel("Canal"), r, 0)
             grid.addWidget(row(self.channel, apply, stretch_last=False), r, 1)

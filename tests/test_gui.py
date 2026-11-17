@@ -819,9 +819,12 @@ def test_live_compositions_by_hand_from_the_acquisition_section(window, qtbot):
         qtbot.wait(120)
     qtbot.waitUntil(lambda: len(compose._engine.tiles) >= 4, timeout=15000)
     assert "Champ actuel" in viewer.layers and "Composition" in viewer.layers
-    assert "champs" in viewer.text_overlay.text and compose.undo_btn.isEnabled()
     assert viewer.layers["Live"].translate[-1] > 0.5 * field_w * px  # le live suit la lame
-    qtbot.wait(800)  # la lame est arrêtée : plus aucun champ ne s'ajoute
+    # la lame est arrêtée : plus aucun champ ne s'ajoute (la platine simulée saute d'un coup à
+    # chaque pas, ce que le suivi peut prendre pour un geste trop rapide tant qu'elle bouge)
+    qtbot.waitUntil(lambda: "champs" in viewer.text_overlay.text, timeout=5000)
+    qtbot.wait(800)
+    assert compose.undo_btn.isEnabled()
     count = len(compose._engine.tiles)
     compose.undo()
     qtbot.wait(800)  # la lame n'a pas bougé : le champ retiré ne revient pas

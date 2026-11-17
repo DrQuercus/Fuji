@@ -9,6 +9,7 @@ import numpy as np
 from napari.components import ViewerModel
 from qtpy.QtCore import QObject, QTimer, Signal
 
+from fuji.core.frame import is_rgb
 from fuji.core.microscope import Microscope
 
 from .prefs import settings
@@ -37,6 +38,8 @@ class LiveController(QObject):
     live_changed = Signal(bool)
     #: Chaque nouvelle image affichée (pour l'histogramme, les assistants...).
     frame_shown = Signal(object)
+    #: La caméra n'envoie plus d'images (débranchée, en erreur) : message à montrer.
+    stalled = Signal(str)
 
     def __init__(self, microscope: Microscope, viewer: ViewerModel, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -48,6 +51,8 @@ class LiveController(QObject):
         self._timer.setInterval(30)
         self._timer.timeout.connect(self._poll)
         self._last_count = -1
+        self._last_frame_time = 0.0
+        self._stall_reported = False
         self._times: deque[float] = deque(maxlen=30)
         self._frames_since_contrast = 0
         #: place du live dans la vue : (agrandissement, décalage en unités de la vue). Les
@@ -63,6 +68,7 @@ class LiveController(QObject):
         if cam is None:
             return
         cam.start_live()
+        self._last_frame_time, self._stall_reported = time.monotonic(), False
         self._timer.start()
         self.live_changed.emit(True)
 
@@ -96,8 +102,10 @@ class LiveController(QObject):
             return
         count, frame = cam.latest_frame()
         if frame is None or count == self._last_count:
+            self._watch(cam)
             return
         self._last_count = count
+        self._last_frame_time, self._stall_reported = time.monotonic(), False
         self.show_frame(frame, LIVE_LAYER)
         self.frame_shown.emit(frame)
         now = time.monotonic()
@@ -105,10 +113,29 @@ class LiveController(QObject):
         if len(self._times) > 2:
             self.fps_changed.emit((len(self._times) - 1) / (self._times[-1] - self._times[0]))
 
+    def _watch(self, cam: object) -> None:
+        """Pas de nouvelle image depuis longtemps : on le dit une fois, avec la cause si la
+        caméra la connaît (avant, le live se figeait sans un mot)."""
+        if self._stall_reported:
+            return
+        try:
+            patience = max(5.0, 4 * cam.get_exposure() / 1000 + 3.0)  # type: ignore[attr-defined]
+        except Exception:
+            patience = 5.0
+        if time.monotonic() - self._last_frame_time < patience:
+            return
+        self._stall_reported = True
+        reason = "vérifiez son câble, puis Microscope → Reconnecter"
+        try:
+            cam._check_alive()  # type: ignore[attr-defined]
+        except Exception as exc:
+            reason = str(exc)
+        self.stalled.emit(f"La caméra n'envoie plus d'images : {reason}")
+
     def show_frame(self, frame: np.ndarray, name: str) -> None:
         calibrated = self.microscope.pixel_size_um()
         px = calibrated or 1.0
-        rgb = frame.ndim == 3 and frame.shape[-1] in (3, 4)
+        rgb = is_rgb(frame)
         cam = self.microscope.camera
         bits = cam.bit_depth if cam else None
         if name in self.viewer.layers:

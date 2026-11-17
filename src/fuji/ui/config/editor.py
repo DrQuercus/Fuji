@@ -148,11 +148,11 @@ class ConfigEditor(QDialog):
     # ------------------------------------------------------------ vérifications
     def _update_issues(self) -> None:
         self.title_label.setText(self.data.get("name") or "Microscope")
-        self.path_label.setText(str(self.path.name) if self.path else "nouveau profil")
+        self.path_label.setText(str(self.path.name) if self.path else "nouveau microscope")
         try:
             issues = MicroscopeProfile.model_validate(self.data).check()
-        except Exception as exc:
-            self.issues.setText(f"⚠ Profil invalide : {str(exc).splitlines()[0]}")
+        except Exception:
+            self.issues.setText("⚠ Une valeur saisie n'est pas valable (détail avec « Vérifier »)")
             return
         self.issues.setText(f"⚠ {len(issues)} point(s) à vérifier — cliquer pour le détail" if issues else "")
 
@@ -160,7 +160,7 @@ class ConfigEditor(QDialog):
         try:
             profile = self.collect()
         except Exception as exc:
-            QMessageBox.warning(self, "Profil invalide", str(exc))
+            QMessageBox.warning(self, "Configuration non valable", str(exc))
             return
         issues = profile.check()
         if issues:
@@ -173,7 +173,7 @@ class ConfigEditor(QDialog):
         try:
             profile = self.collect()
         except Exception as exc:
-            QMessageBox.warning(self, "Profil invalide", str(exc))
+            QMessageBox.warning(self, "Configuration non valable", str(exc))
             return
 
         def job() -> list[str]:
@@ -212,7 +212,7 @@ class ConfigEditor(QDialog):
         try:
             profile = self.collect()
         except Exception as exc:
-            QMessageBox.warning(self, "Profil invalide", str(exc))
+            QMessageBox.warning(self, "Configuration non valable", str(exc))
             return
         target = M.save_path_for(self.data, self.path)
         target.parent.mkdir(parents=True, exist_ok=True)

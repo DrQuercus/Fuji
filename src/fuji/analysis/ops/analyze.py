@@ -89,7 +89,9 @@ def plot_profile(
 
     Un tableau et un graphique par opération ; s'il y a plusieurs ROI, une colonne par ROI."""
     if not len(roi):
-        raise ValueError("Dessinez d'abord une ligne ou un rectangle (calque de formes)")
+        raise ValueError(
+            "Dessinez d'abord une ligne ou un rectangle sur l'image (outils « Dessiner », en haut du panneau)"
+        )
     plane = _plane(image)
     profiles = [roi_profile(plane, roi, i, width) for i in range(len(roi))]
     n = max(len(p) for p in profiles)
@@ -265,7 +267,7 @@ def measure_rois_op(image: Image, roi: Rois) -> Table:
     """Mesure chaque région dessinée (rectangle, ellipse, polygone, ligne) : surface,
     intensités, position, périmètre, forme. Mêmes colonnes et définitions qu'ImageJ."""
     if not len(roi):
-        raise ValueError("Dessinez d'abord au moins une ROI (calque de formes)")
+        raise ValueError("Dessinez d'abord une ROI sur l'image (outils « Dessiner », en haut du panneau)")
     df = measure_rois(_plane(image), roi, image.px)
     units = {**_units(image.unit, True), "Length": image.unit}
     return Table(df, name=f"ROI — {image.name}", units=units)

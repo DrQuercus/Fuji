@@ -149,6 +149,3 @@ def icon(name: str, color: str | None = None, size: int = 20, *, checked_color: 
     ic.addPixmap(pixmap(name, checked_color or color or p.accent, size), QIcon.Mode.Normal, QIcon.State.On)
     ic.addPixmap(pixmap(name, p.faint, size), QIcon.Mode.Disabled, QIcon.State.Off)
     return ic
-
-
-NAMES = tuple(sorted([*_PATHS, "logo"]))

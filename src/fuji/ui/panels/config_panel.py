@@ -98,7 +98,7 @@ class ConfigPanel(QWidget):
         card.add(new)
         lay.addWidget(card)
 
-        card = Card("Dossier des profils", icon_name="folder")
+        card = Card("Dossier des configurations", icon_name="folder")
         card.add(label(str(user_profile_dir()), "faint"))
         opener = button("Ouvrir le dossier", "folder")
         opener.clicked.connect(self._open_folder)
@@ -149,21 +149,23 @@ class ConfigPanel(QWidget):
                 "Les profils fournis avec Fuji ne peuvent pas être supprimés (leur copie personnelle, si).",
             )
             return
-        answer = QMessageBox.question(self, "Supprimer", f"Supprimer le profil {path.name} ?")
+        answer = QMessageBox.question(self, "Supprimer", f"Supprimer la configuration {path.name} ?")
         if answer == QMessageBox.StandardButton.Yes:
             path.unlink(missing_ok=True)
             self.refresh()
 
     def _import(self) -> None:
         src, _ = QFileDialog.getOpenFileName(
-            self, "Importer un profil", str(Path.home()), "Profil Fuji (*.yaml *.yml)"
+            self, "Importer une configuration", str(Path.home()), "Configuration Fuji (*.yaml *.yml)"
         )
         if not src:
             return
         try:
             MicroscopeProfile.load(src)
         except Exception as exc:
-            QMessageBox.warning(self, "Importer", f"Profil invalide :\n{exc}")
+            QMessageBox.warning(
+                self, "Importer", f"Ce fichier n'est pas une configuration de microscope valable :\n{exc}"
+            )
             return
         user_profile_dir().mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, user_profile_dir() / Path(src).name)

@@ -1,4 +1,4 @@
-"""Panneau « Réglages » : apparence, interface, Fiji, ToupTek, dossiers."""
+"""Panneau « Préférences » : apparence, interface, Fiji, ToupTek, dossiers."""
 
 from __future__ import annotations
 
@@ -92,8 +92,8 @@ class SettingsPanel(QWidget):
         card = Card(
             "Fiji / ImageJ",
             icon_name="chart",
-            subtitle="Ton installation Fiji (avec tes plugins) est utilisée pour les "
-            "macros et « Ouvrir dans Fiji ».",
+            subtitle="Votre installation de Fiji (avec vos plugins) sert aux macros et à "
+            "« Ouvrir dans Fiji ».",
         )
         from fuji.analysis.imagej import find_fiji
 

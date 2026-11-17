@@ -71,7 +71,7 @@ class ManualStateDevice(_ManualMixin, StateDevice):
         labels: Sequence[str],
         *,
         initial: int | str = 0,
-        prompt: str = "Placez « {label} » sur {device}.",
+        prompt: str = "Mettez en place « {label} » ({device}).",
         **kwargs: Any,
     ) -> None:
         super().__init__(name, **kwargs)

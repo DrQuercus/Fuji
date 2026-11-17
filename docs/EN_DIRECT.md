@@ -108,7 +108,7 @@ Conseils :
 
 ## Essayer sans microscope
 
-Avec le microscope de démonstration : dans **Contrôle → Toutes les propriétés** (mode
+Avec le microscope de démonstration : dans **Contrôle → Réglages avancés** (mode
 expert), « Échantillon : vide » donne une zone vide pour l'image de référence, et
 « Épaisseur de l'échantillon : 40 µm » simule un objet épais. Pour le panorama, déplace la
 platine simulée avec les flèches du panneau Contrôle.

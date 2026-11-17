@@ -65,7 +65,7 @@ from .tool_menu import RecipePage, ToolMenu
 _NONE = "(aucune)"
 ROI_LAYER = "ROI"
 POINTS_LAYER = "Points"
-PREVIEW_PREFIX = "Aperçu — "
+PREVIEW_PREFIX = documents.PREVIEW_PREFIX
 _LAYER_TYPES = {Image: ImageLayer, Labels: LabelsLayer, Rois: ShapesLayer, Points: PointsLayer}
 _INPUT_LABELS = {
     "image": "Image",
@@ -83,6 +83,13 @@ _INPUT_LABELS = {
     "red": "Rouge",
     "green": "Vert",
     "blue": "Bleu",
+}
+#: ce qu'il faut faire quand une entrée manque, selon son type
+_MISSING_INPUT = {
+    Image: "Il manque une image pour « {label} » : ouvrez-en une (double-clic dans la liste « Images »).",
+    Labels: "Il manque un masque pour « {label} » : créez-le d'abord (menu « Isoler les objets »).",
+    Rois: "Il manque une ROI : dessinez-la sur l'image (outils « Dessiner », en haut du panneau).",
+    Points: "Il manque des points : posez-les sur l'image (outil « Points », en haut du panneau).",
 }
 #: outils de dessin : (icône, info-bulle, type de calque, mode napari)
 _TOOLS = (
@@ -204,6 +211,7 @@ class AnalysisPanel(QWidget):
         self._params: Container | None = None
         self._busy = False
         self._preview_pending = False
+        self._run_pending = False
         self._recipe: Recipe | None = None
         self._step = 0
         self._done: set[int] = set()
@@ -321,7 +329,7 @@ class AnalysisPanel(QWidget):
         self._preview_timer.timeout.connect(self._run_preview)
         self._show_page(self.menu_page)
         self._update_options()
-        viewer.layers.events.inserted.connect(self._refresh_inputs)
+        viewer.layers.events.inserted.connect(self._layer_inserted)
         viewer.layers.events.removed.connect(self._refresh_inputs)
 
     def set_expert(self, expert: bool) -> None:
@@ -507,21 +515,22 @@ class AnalysisPanel(QWidget):
             self._show_recipe_page()
 
     def _guess_objects(self) -> str | None:
-        """« sombres » si le fond de l'image est clair (fond clair, coloration), « claires »
+        """« sombres » si le fond de l'image est clair (fond clair, coloration), « clairs »
         sinon (fluorescence) : la plupart des pixels appartiennent au fond."""
         layer = self._primary_layer()
         if layer is None:
             return None
         data, _ = displayed_plane(layer, self.viewer)
-        data = np.asarray(data, dtype=np.float64)
+        # sous-échantillonner d'abord : 100 000 pixels suffisent (une image 4K entière en
+        # nombres réels coûtait 0,2 s et 200 Mo)
+        step = max(1, int(np.sqrt(data.shape[0] * data.shape[1] / 100_000)))
+        sample = np.asarray(data[::step, ::step], dtype=np.float32)
         if _is_rgb(layer):
-            data = data[..., :3].mean(axis=-1)
-        step = max(1, int(np.sqrt(data.size / 100_000)))
-        sample = data[::step, ::step]
+            sample = sample[..., :3].mean(axis=-1)
         lo, mid, hi = np.percentile(sample, (1, 50, 99))
         if hi <= lo:
             return None
-        return "sombres" if mid > (lo + hi) / 2 else "claires"
+        return "sombres" if mid > (lo + hi) / 2 else "clairs"
 
     def _update_banner(self, done: bool = False) -> None:
         recipe = self._recipe
@@ -613,6 +622,12 @@ class AnalysisPanel(QWidget):
             combo.blockSignals(False)
         self._update_options()
 
+    def _layer_inserted(self, event: Any) -> None:
+        layer = getattr(event, "value", None)
+        if layer is not None:  # un calque renommé garde sa place dans les listes d'entrées
+            layer.events.name.connect(self._refresh_inputs)
+        self._refresh_inputs()
+
     def _input_changed(self, *_: Any) -> None:
         self._update_options()
         self._schedule_preview()
@@ -656,11 +671,10 @@ class AnalysisPanel(QWidget):
             name = self._inputs[spec.name].currentText()
             if not name or name == _NONE:
                 if not spec.optional:
-                    kind = (
-                        "une ROI (outils de dessin en haut du panneau)" if spec.kind is Rois else "un calque"
-                    )
                     label = _INPUT_LABELS.get(spec.name, spec.name)
-                    raise ValueError(f"Choisissez {kind} pour « {label} »")
+                    raise ValueError(
+                        _MISSING_INPUT.get(spec.kind, "Il manque « {label} ».").format(label=label)
+                    )
                 chosen.append((spec, None))
                 continue
             chosen.append((spec, self.viewer.layers[name]))
@@ -715,12 +729,20 @@ class AnalysisPanel(QWidget):
         return plane_inputs, indices, lead
 
     def _run(self) -> None:
-        if self._op is None or self._busy:
+        if self._op is None:
             return
+        if self._busy:  # un aperçu se calcule : « Exécuter » partira dès qu'il aura fini
+            self._run_pending = True
+            self.run_btn.setEnabled(False)
+            return
+        self._run_pending = False
         op = self._op
         self._preview_timer.stop()
         self._clear_preview()
         try:
+            # l'image traitée est notée maintenant : les résultats lui reviennent même si l'on
+            # change d'outil ou d'image pendant le calcul
+            target = self._target()
             if self.whole_stack.isChecked() and not op.stack:
                 plane_inputs, indices, lead = self._collect_planes()
                 params = self._param_values()
@@ -728,13 +750,15 @@ class AnalysisPanel(QWidget):
                     run_on_planes, op, plane_inputs, params, _start_thread=False, _ignore_errors=True
                 )
                 worker.returned.connect(
-                    lambda results: self._show_outputs(op, combine_planes(results, indices, lead))
+                    lambda results: self._show_outputs(
+                        op, combine_planes(results, indices, lead), target=target
+                    )
                 )
                 self.message.emit(f"{op.name} sur {len(indices)} plans…")
             else:
                 inputs, params = self._collect()
                 worker = create_worker(op.func, *inputs, **params, _start_thread=False, _ignore_errors=True)
-                worker.returned.connect(lambda out: self._show_outputs(op, out))
+                worker.returned.connect(lambda out: self._show_outputs(op, out, target=target))
                 self.message.emit(f"{op.name} en cours…")
         except Exception as exc:
             QMessageBox.warning(self, "Analyse", str(exc))
@@ -745,14 +769,27 @@ class AnalysisPanel(QWidget):
         worker.finished.connect(self._finished)
         worker.start()
 
+    def _target(self) -> tuple[tuple[float, float], str | None]:
+        """(décalage, image ouverte) de l'entrée principale : où poser les résultats."""
+        primary = self._primary_layer()
+        if primary is None:
+            return (0.0, 0.0), None
+        return (float(primary.translate[-2]), float(primary.translate[-1])), documents.doc_of(primary)
+
     def _finished(self) -> None:
         self._busy = False
         self.run_btn.setEnabled(True)
-        if self._preview_pending:
+        if self._run_pending:
+            self._run()
+        elif self._preview_pending:
             self._schedule_preview()
 
     def _error(self, op: Operation, exc: Exception) -> None:
-        QMessageBox.warning(self, op.name, f"Erreur : {exc}")
+        QMessageBox.warning(
+            self,
+            op.name,
+            f"« {op.name} » n'a pas abouti : {exc}\n\nVérifiez l'image choisie et les réglages.",
+        )
         self.message.emit(f"{op.name} : erreur")
 
     # ------------------------------------------------------------------- aperçu
@@ -792,16 +829,20 @@ class AnalysisPanel(QWidget):
             self.viewer.layers.remove(layer)
 
     # ------------------------------------------------------------------ sorties
-    def _show_outputs(self, op: Operation, out: Any, preview: bool = False) -> None:
+    def _show_outputs(
+        self,
+        op: Operation,
+        out: Any,
+        preview: bool = False,
+        target: tuple[tuple[float, float], str | None] | None = None,
+    ) -> None:
         if preview:
             if self._op is not op or not self.preview.isChecked():
                 return  # l'utilisateur est passé à autre chose pendant le calcul
             selected = self.viewer.layers.selection.active
             self._clear_preview()
-        primary = self._primary_layer()
-        offset = tuple(primary.translate[-2:]) if primary is not None else (0.0, 0.0)
         # les résultats appartiennent à l'image traitée : ils se ferment avec elle
-        doc = documents.doc_of(primary) if primary is not None else None
+        offset, doc = target if target is not None else self._target()
         items = out if isinstance(out, tuple) else (out,)
         for item in items:
             if item is None:
@@ -815,7 +856,7 @@ class AnalysisPanel(QWidget):
             if selected is not None and selected.name in self.viewer.layers:
                 self.viewer.layers.selection.active = selected
             return
-        self.message.emit(f"{op.name} terminé")
+        self.message.emit(f"{op.name} : terminé")
         if self._recipe is not None and op is self._op:
             self._done.add(self._step)
             self._update_banner(done=True)
@@ -865,6 +906,29 @@ class AnalysisPanel(QWidget):
                 layer = self.viewer.add_image(data, rgb=rgb, **kwargs)
         layer.metadata["pixel_size_um"] = item.pixel_size_um
         documents.tag(layer, doc)
+
+    # ------------------------------------------------------- pour le reste de Fuji
+    @property
+    def busy(self) -> bool:
+        """Vrai pendant un calcul (opération ou aperçu)."""
+        return self._busy
+
+    def add_result(self, item: Any, prefix: str = "", doc: str | None = None) -> None:
+        """Affiche un résultat venu d'ailleurs (assistant IA, script) : image, masque, ROI
+        ou points."""
+        self._add_layer(item, (0.0, 0.0), prefix, doc)
+
+    def run_operation(self, name: str, inputs: dict[str, str] | None = None) -> None:
+        """Ouvre une opération, choisit ses entrées (nom de l'entrée → nom du calque, quand le
+        calque existe) et l'exécute : les raccourcis « Mesurer », « Histogramme »…"""
+        if self.preview.isChecked():
+            self.preview.setChecked(False)
+        self.select_operation(name)
+        for key, layer_name in (inputs or {}).items():
+            combo = self._inputs.get(key)
+            if combo is not None and combo.findText(layer_name) >= 0:
+                combo.setCurrentText(layer_name)
+        self._run()
 
     def _open_in_fiji(self) -> None:
         layer = self.viewer.layers.selection.active

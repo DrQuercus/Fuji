@@ -20,6 +20,9 @@ prises arrivent dans la liste « Images », commune aux deux espaces.
 from __future__ import annotations
 
 import json
+import logging
+import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -50,7 +53,7 @@ from fuji import __version__
 from fuji.analysis import Table
 from fuji.analysis.guide import MENUS, RECIPES, help_of
 from fuji.analysis.imagej import ImageJBridge
-from fuji.core.frame import Frame
+from fuji.core.frame import Frame, is_rgb
 from fuji.core.microscope import Microscope
 from fuji.core.profile import MicroscopeProfile, available_profiles
 from fuji.io import save_image
@@ -63,7 +66,7 @@ from .config.editor import ConfigEditor
 from .config.wizard import NewMicroscopeDialog
 from .display_bar import DisplayBar
 from .gallery import GalleryPanel
-from .live import LiveController, contrast_for, units_for
+from .live import LIVE_LAYER, LiveController, contrast_for, units_for
 from .panels.acquisition_panel import AcquisitionPanel
 from .panels.analysis_panel import AnalysisPanel, layer_to_image
 from .panels.assistants_panel import AssistantsPanel
@@ -77,6 +80,8 @@ from .quickbar import QuickBar
 from .theme import ThemeManager, napari_theme_id, palette
 from .widgets import ResultsWidget
 
+log = logging.getLogger(__name__)
+
 SUBTITLES = {
     "images": "Enregistrées automatiquement. Double-clic : ouvrir dans Analyse.",
     "control": "Caméra, optique, éclairage, platine et mise au point.",
@@ -89,11 +94,12 @@ SUBTITLES = {
 }
 TITLES = {key: title for key, title, *_ in SECTIONS}
 TITLES.update(
-    control="Contrôle du microscope",
-    config="Microscopes",
-    analysis="Outils d'analyse",
-    images="Images prises",
+    control="Contrôle",
+    config="Configuration du microscope",
+    analysis="Outils",
 )
+#: images d'une acquisition programmée en cours, montrées dans la vue du microscope
+ACQUISITION_LAYER = "Acquisition"
 #: section du panneau de droite affichée en entrant dans un espace pour la première fois
 DEFAULT_SECTION = {"microscope": "acquisition", "analyse": "analysis"}
 
@@ -116,6 +122,21 @@ def _scroll(widget: QWidget) -> QScrollArea:
     area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     area.setWidget(widget)
     return area
+
+
+def enable_napari_actions(current: Callable[[], ViewerModel]) -> None:
+    """Rend utilisables les commandes de napari qui passent par ses « actions » : boutons de
+    mode des réglages d'un calque (dessiner, sélectionner, peindre…), menu du clic droit sur
+    la liste des calques. Elles cherchent « la vue courante » auprès de la fenêtre napari, que
+    Fuji n'a pas (il intègre la vue seule) : sans cela, chaque clic levait une erreur."""
+    try:
+        import napari.viewer as napari_viewer
+        from napari._qt._qapp_model.qactions import init_qactions
+
+        init_qactions()
+        napari_viewer.current_viewer = current
+    except Exception:  # interne à napari : peut bouger d'une version à l'autre
+        log.exception("Actions de napari indisponibles")
 
 
 def fix_napari_buttons(qt_viewer: QtViewer) -> None:
@@ -183,7 +204,6 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.settings = settings()
         self.resize(1560, 980)
-        self._captures = 0
         self._frame_counter = 0
         self.m: Microscope | None = None
         self.live: LiveController | None = None
@@ -208,6 +228,17 @@ class MainWindow(QMainWindow):
         self._mode: str | None = None
         self._section: str | None = None
         self._live_paused = False
+        enable_napari_actions(self.current_viewer)
+        try:  # les messages de napari (il n'a pas sa fenêtre pour les montrer)
+            from napari.utils.notifications import notification_manager
+
+            notification_manager.notification_ready.connect(self._on_napari_notification)
+        except Exception:
+            log.debug("Notifications de napari indisponibles")
+        # glisser un fichier sur l'image : c'est Fuji qui l'ouvre (napari n'a pas ses lecteurs ici)
+        for qt in (self.scope_qt, self.qt_viewer):
+            qt.setAcceptDrops(False)
+        self.setAcceptDrops(True)
         self._apply_viewer_theme()
         ThemeManager.get().changed.connect(self._on_theme_changed)
         self.manual_handler = QtManualActionHandler(self)
@@ -297,7 +328,7 @@ class MainWindow(QMainWindow):
 
         self.results_tabs = QTabWidget()
         self.results_tabs.setTabsClosable(True)
-        self.results_tabs.tabCloseRequested.connect(self.results_tabs.removeTab)
+        self.results_tabs.tabCloseRequested.connect(self._close_results_tab)
         self.results_dock = QDockWidget("Résultats", self)
         self.results_dock.setObjectName("dock_results")
         self.results_dock.setWidget(self.results_tabs)
@@ -334,8 +365,11 @@ class MainWindow(QMainWindow):
 
         # barre d'état -----------------------------------------------------------
         sb = self.statusBar()
+        self.cursor_label = QLabel()
+        self.cursor_label.setObjectName("hint")
         self.optics_label = QLabel()
         self.fps_label = QLabel()
+        sb.addPermanentWidget(self.cursor_label)
         sb.addPermanentWidget(self.optics_label)
         sb.addPermanentWidget(self.fps_label)
 
@@ -379,13 +413,14 @@ class MainWindow(QMainWindow):
         self.live.fps_changed.connect(lambda f: self.fps_label.setText(f"{f:4.1f} im/s"))
         self.live.live_changed.connect(self._on_live_changed)
         self.live.frame_shown.connect(self._on_live_frame)
+        self.live.stalled.connect(self.warn)
 
         self.control = MicroscopePanel(scope)
         self.properties = PropertiesPanel(scope)
         control_tabs = QTabWidget()
         control_tabs.setDocumentMode(True)
         control_tabs.addTab(_scroll(self.control), "Réglages")
-        self._props_index = control_tabs.addTab(self.properties, "Toutes les propriétés")
+        self._props_index = control_tabs.addTab(self.properties, "Réglages avancés")
         self.control_tabs = control_tabs
         self._set_page("control", control_tabs)
         # le panneau de gauche est assez large pour tout le contrôle de ce microscope
@@ -596,7 +631,7 @@ class MainWindow(QMainWindow):
             editor.exec()
 
     def _after_edit(self, path: Path) -> None:
-        self.notify(f"Profil enregistré : {path}")
+        self.notify(f"Configuration enregistrée : {path}")
         is_current = (
             self.m is not None
             and self.m.profile_path is not None
@@ -763,7 +798,7 @@ class MainWindow(QMainWindow):
         m_file.addAction(self._action("Nouveau microscope…", self.new_profile, "Ctrl+N"))
         m_file.addAction(self._action("Modifier le microscope…", lambda: self.edit_profile(None), "Ctrl+E"))
         m_file.addSeparator()
-        prefs = self._action("Réglages…", lambda: self.sidebar.select("settings"), "Ctrl+,")
+        prefs = self._action("Préférences…", lambda: self.sidebar.select("settings"), "Ctrl+,")
         prefs.setMenuRole(QAction.MenuRole.PreferencesRole)
         m_file.addAction(prefs)
         quit_ = self._action("Quitter", self.close, "Ctrl+Q")
@@ -774,13 +809,24 @@ class MainWindow(QMainWindow):
         m_scope.addAction(self._action("Live", self._toggle_live, "Ctrl+L"))
         m_scope.addAction(self._action("Capturer", self.snap, "Ctrl+K"))
         m_scope.addSeparator()
+        # compositions en direct et image de référence : comme dans le logiciel de la caméra
+        m_scope.addAction(
+            self._action("Panorama en direct", lambda: self.start_composition("panorama"), "Ctrl+Shift+P")
+        )
+        m_scope.addAction(
+            self._action(
+                "Profondeur de champ étendue en direct", lambda: self.start_composition("edf"), "Ctrl+Shift+D"
+            )
+        )
+        m_scope.addAction(self._action("Prendre l'image de référence", self.take_reference))
+        m_scope.addSeparator()
         m_scope.addAction(self._action("Reconnecter", self.reload_microscope))
         m_scope.addAction(self._action("Informations matériel…", self.show_hardware_info))
 
         m_view = mb.addMenu("&Affichage")
         m_view.addAction(self._action("Espace Microscope", lambda: self.set_mode("microscope"), "Ctrl+1"))
         m_view.addAction(self._action("Espace Analyse", lambda: self.set_mode("analyse"), "Ctrl+2"))
-        m_view.addAction(self._action("Images prises", lambda: self.sidebar.select("images"), "Ctrl+3"))
+        m_view.addAction(self._action("Liste des images", lambda: self.sidebar.select("images"), "Ctrl+3"))
         m_view.addSeparator()
         self.expert_action = self._action("Mode expert", self.set_expert, checkable=True)
         m_view.addAction(self.expert_action)
@@ -813,8 +859,16 @@ class MainWindow(QMainWindow):
                 sub.addAction(act)
         m_an.addSeparator()
         # mêmes gestes que dans ImageJ : mesurer, histogramme, profil sur l'image active
-        m_an.addAction(self._action("Mesurer", self.quick_measure, "Ctrl+M"))
-        m_an.addAction(self._action("Histogramme", lambda: self.quick_operation("Histogramme"), "Ctrl+H"))
+        # sur Mac, ⌘M (réduire la fenêtre) et ⌘H (masquer l'application) sont pris par le système
+        mac = sys.platform == "darwin"
+        m_an.addAction(self._action("Mesurer", self.quick_measure, "Ctrl+Shift+M" if mac else "Ctrl+M"))
+        m_an.addAction(
+            self._action(
+                "Histogramme",
+                lambda: self.quick_operation("Histogramme"),
+                "Ctrl+Shift+H" if mac else "Ctrl+H",
+            )
+        )
         m_an.addAction(
             self._action(
                 "Profil d'intensité", lambda: self.quick_operation("Profil d'intensité"), "Ctrl+Shift+K"
@@ -829,16 +883,48 @@ class MainWindow(QMainWindow):
         about.setMenuRole(QAction.MenuRole.AboutRole)
         m_help.addAction(about)
 
+    def _on_napari_notification(self, notification: Any) -> None:
+        text = str(getattr(notification, "message", "") or "")
+        if text:
+            self._message.emit(text.splitlines()[0][:200])
+
+    def _close_results_tab(self, index: int) -> None:
+        widget = self.results_tabs.widget(index)
+        self.results_tabs.removeTab(index)
+        if widget is not None:
+            widget.deleteLater()  # sinon le tableau (et ses données) reste en mémoire
+
+    # ------------------------------------------------------------ glisser-déposer
+    def dragEnterEvent(self, event: Any) -> None:
+        if event.mimeData().hasUrls() and any(u.isLocalFile() for u in event.mimeData().urls()):
+            event.acceptProposedAction()
+
+    def dropEvent(self, event: Any) -> None:
+        """Fichiers déposés sur la fenêtre : ouverts dans Analyse (le premier remplace l'image
+        ouverte, les autres s'ouvrent à côté)."""
+        paths = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]
+        if not paths:
+            return
+        event.acceptProposedAction()
+        self.open_paths(paths)
+
     # ================================================================ état
     def notify(self, text: str) -> None:
         self.statusBar().showMessage(text, 6000)
 
+    def warn(self, text: str) -> None:
+        """Un problème à ne pas manquer : le message reste affiché jusqu'au suivant."""
+        log.warning(text)
+        self.statusBar().showMessage(f"⚠ {text}")
+
     def _on_status(self, event: Any) -> None:
+        """Coordonnées et valeur sous la souris : dans leur propre case, pour ne pas effacer
+        les messages (dont les erreurs) affichés à gauche."""
         value = event.value
         if isinstance(value, dict):
             value = value.get("coordinates", "")
-        if value:
-            self.statusBar().showMessage(str(value))
+        text = str(value or "")
+        self.cursor_label.setText("" if text == "Ready" else text)
 
     def _emit_optics_changed(self, *_: object) -> None:
         try:
@@ -912,14 +998,12 @@ class MainWindow(QMainWindow):
         if layer_name in self.viewer.layers:
             self.viewer.layers.remove(layer_name)
         try:
-            self.analysis._add_layer(item, (0.0, 0.0), "IA — ")
+            self.analysis.add_result(item, "IA — ")
         except Exception as exc:
             self.notify(f"IA : {name} (affichage impossible : {exc})")
 
     def _on_double_click(self, viewer: Any, event: Any) -> None:
         """Double-clic sur l'image du live : la platine motorisée amène ce point au centre."""
-        from .live import LIVE_LAYER
-
         m = self.m
         box = getattr(getattr(self, "control", None), "click_to_center", None)
         motorized = m is not None and m.xy_stage is not None and not m.xy_stage.manual
@@ -927,11 +1011,11 @@ class MainWindow(QMainWindow):
             wanted = bool(motorized and box is not None and box.isChecked())
         except RuntimeError:  # panneau détruit
             wanted = False
-        if not wanted or self._acquiring or LIVE_LAYER not in self.viewer.layers:
+        if not wanted or self._acquiring or LIVE_LAYER not in viewer.layers:
             for callback in self._default_double_click:
                 callback(viewer, event)
             return
-        layer = self.viewer.layers[LIVE_LAYER]
+        layer = viewer.layers[LIVE_LAYER]
         coords = layer.world_to_data(event.position)
         self.center_on(float(coords[-2]), float(coords[-1]), tuple(layer.data.shape))
 
@@ -999,7 +1083,7 @@ class MainWindow(QMainWindow):
         if self.m is None:
             return
         if self._acquiring:
-            self.notify("Acquisition en cours : capture indisponible")
+            self.notify("Capture impossible pendant une acquisition : attendez la fin, ou « Arrêter »")
             return
         self.topbar.capture.setEnabled(False)
         worker = create_worker(self.m.snap, _start_thread=False, _ignore_errors=True)
@@ -1011,7 +1095,6 @@ class MainWindow(QMainWindow):
     def _on_snap(self, frame: Frame) -> None:
         """La capture rejoint la liste des images prises (enregistrée tout de suite) ; elle
         s'ouvre dans l'espace Analyse quand on en a besoin."""
-        self._captures += 1
         data, metadata = frame.data, frame.metadata.to_dict()
         # le fond est corrigé à la sortie de la caméra (image de référence) : rien à faire ici
         note = ""
@@ -1052,7 +1135,7 @@ class MainWindow(QMainWindow):
                 metadata = {**info.metadata, "source": str(info.path)}
                 self.add_frame(data, info.name, metadata, info.pixel_size_um)
             else:
-                self.open_file(info.path, doc=info.name)
+                self.open_file(info.path, doc=info.name, metadata=dict(info.metadata))
             self.show_document(info.name)
             self.viewer.reset_view()
         if self.mode != "analyse":
@@ -1158,7 +1241,7 @@ class MainWindow(QMainWindow):
         metadata: dict[str, Any] | None = None,
         pixel_size_um: float | None = None,
     ) -> None:
-        rgb = data.ndim == 3 and data.shape[-1] in (3, 4)
+        rgb = is_rgb(data)
         px = pixel_size_um or 1.0
         bits = self.m.camera.bit_depth if self.m is not None and self.m.camera else None
         layer = self.viewer.add_image(
@@ -1185,13 +1268,27 @@ class MainWindow(QMainWindow):
         self._set_hardware_controls_enabled(False)
 
     def _on_acq_frame(self, _event: Any, frame: Frame) -> None:
-        if self.live is not None:
-            self.live.show_frame(frame.data, "Acquisition")
+        if self.live is None:
+            return
+        self.live.show_frame(frame.data, ACQUISITION_LAYER)
+        layers = self.scope_viewer.layers
+        if LIVE_LAYER in layers and layers[LIVE_LAYER].visible:
+            # l'image figée du live cacherait les images acquises : elles passent devant
+            layers[LIVE_LAYER].visible = False
+            layers.move(layers.index(ACQUISITION_LAYER), len(layers))  # tout au-dessus
+
+    def _end_acquisition_view(self) -> None:
+        layers = self.scope_viewer.layers
+        if ACQUISITION_LAYER in layers:
+            layers.remove(ACQUISITION_LAYER)
+        if LIVE_LAYER in layers:
+            layers[LIVE_LAYER].visible = True
 
     def _on_acq_done(self, summary: Any) -> None:
         self.topbar.set_acquisition(0, 0, False)
         self._acquiring = False
         self._set_hardware_controls_enabled(True)
+        self._end_acquisition_view()
         if self._live_before_acq and self.live is not None and self.m is not None and self.m.connected:
             if self.mode == "microscope":
                 self.live.start()
@@ -1204,22 +1301,34 @@ class MainWindow(QMainWindow):
             self.notify(f"Acquisition terminée : {summary.acquired} images, dans la liste « Images »")
 
     def open_dialog(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
+        paths, _ = QFileDialog.getOpenFileNames(
             self,
             "Ouvrir une image",
             str(Path.home()),
             "Images (*.tif *.tiff *.png *.jpg *.jpeg *.bmp);;Tous les fichiers (*)",
         )
-        if path and self._make_room(keep=False):
-            doc = self.open_file(path)
-            if doc is not None:
-                self.show_document(doc)
-                self.viewer.reset_view()
+        if paths:
+            self.open_paths(paths)
+
+    def open_paths(self, paths: list[str]) -> None:
+        """Ouvre des fichiers image dans Analyse : le premier remplace l'image ouverte, les
+        suivants s'ouvrent à côté."""
+        doc = None
+        for i, path in enumerate(paths):
+            if not self._make_room(keep=i > 0):
+                break
+            doc = self.open_file(path) or doc
+        if doc is not None:
+            self.show_document(doc)
+            self.viewer.reset_view()
             self.set_mode("analyse")
 
-    def open_file(self, path: str | Path, doc: str | None = None) -> str | None:
+    def open_file(
+        self, path: str | Path, doc: str | None = None, metadata: dict[str, Any] | None = None
+    ) -> str | None:
         """Ajoute un fichier image à l'espace Analyse ; renvoie le nom de l'image ouverte
-        (tous ses canaux forment une seule image, qui se ferme d'un bloc)."""
+        (tous ses canaux forment une seule image, qui se ferme d'un bloc). ``metadata`` :
+        renseignements connus par ailleurs (liste « Images »), joints à l'image."""
         from fuji.analysis.image import read_pixel_size_um
 
         path = Path(path)
@@ -1244,9 +1353,15 @@ class MainWindow(QMainWindow):
 
                 data, axes, px = io.imread(path), "", None
         except Exception as exc:
-            QMessageBox.warning(self, "Ouvrir", f"Impossible de lire {path.name} : {exc}")
+            log.warning("Lecture de %s impossible : %s", path, exc)
+            QMessageBox.warning(
+                self,
+                "Ouvrir",
+                f"Fuji ne peut pas ouvrir « {path.name} ».\n\nFormats lus : TIFF (dont OME-TIFF), PNG, "
+                f"JPEG, BMP ; pour les autres, passez par Fiji.\n\nDétail : {exc}",
+            )
             return None
-        rgb = axes.endswith("S") or (not axes and data.ndim == 3 and data.shape[-1] in (3, 4))
+        rgb = axes.endswith("S") or (not axes and is_rgb(data))
         name = path.stem.replace(".ome", "")
         scale = [1.0] * (data.ndim - (1 if rgb else 0))
         if px:
@@ -1277,19 +1392,27 @@ class MainWindow(QMainWindow):
         if layers is None:
             if px:
                 kwargs["units"] = ("µm",) * len(scale)
+            if data.ndim == (3 if rgb else 2) and not isinstance(data, np.memmap):
+                # même contraste que pour une image qui vient d'être prise (centiles robustes)
+                kwargs["contrast_limits"] = contrast_for(data, None)
             layers = self.viewer.add_image(data, name=name, scale=scale, **kwargs)
         doc = doc or name
         for layer in layers if isinstance(layers, list) else [layers]:
+            layer.metadata.update(metadata or {})
             layer.metadata["pixel_size_um"] = px
             layer.metadata["source"] = str(path)
             documents.tag(layer, doc, source=True)
-        self.notify(f"Ouvert : {path.name} ({axes or data.shape})")
+        self.notify(f"Ouvert : {path.name}")
         return doc
 
     def save_layer(self) -> None:
         layer = self.viewer.layers.selection.active
         if layer is None:
-            QMessageBox.information(self, "Enregistrer", "Sélectionnez un calque à enregistrer.")
+            QMessageBox.information(
+                self,
+                "Enregistrer",
+                "Cliquez d'abord, dans « Calques », sur l'image ou le masque à enregistrer.",
+            )
             return
         default = str(Path.home() / f"{layer.name}.ome.tif")
         path, _ = QFileDialog.getSaveFileName(
@@ -1333,6 +1456,32 @@ class MainWindow(QMainWindow):
         images = [ly for ly in reversed(self.viewer.layers) if isinstance(ly, ImageLayer)]
         return images[0] if images else None
 
+    def start_composition(self, kind: str) -> None:
+        """Lance un panorama (« panorama ») ou une profondeur de champ étendue (« edf ») en
+        direct, depuis n'importe où (menu Microscope)."""
+        if self.m is None or self.m.camera is None:
+            self.notify("Aucune caméra connectée")
+            return
+        if self._acquiring:
+            self.notify("Impossible pendant une acquisition")
+            return
+        if self.mode != "microscope":
+            self.set_mode("microscope")
+        self.sidebar.select("acquisition")
+        if self.compose.running:
+            self.notify("Une composition est déjà en cours : terminez-la ou annulez-la")
+            return
+        self.compose.start(kind)
+
+    def take_reference(self) -> None:
+        """Prend l'image de référence (fond) pour l'objectif et le canal actuels."""
+        if self.m is None or self.m.camera is None:
+            self.notify("Aucune caméra connectée")
+            return
+        if self.mode != "microscope":
+            self.set_mode("microscope")
+        self.control.flatfield.take("flat")
+
     def open_tool(self, name: str) -> None:
         """Ouvre la fiche d'un outil d'analyse (menu « Analyse »)."""
         if self.mode != "analyse":
@@ -1353,18 +1502,10 @@ class MainWindow(QMainWindow):
 
         layer = self._active_image_layer()
         if layer is None:
-            self.notify("Aucune image à analyser")
+            self.notify("Ouvrez d'abord une image (double-clic dans la liste « Images »)")
             return
-        panel = self.analysis
         self.sidebar.select("analysis")
-        panel.preview.setChecked(False)
-        panel.select_operation(name)
-        for key, combo in panel._inputs.items():
-            if key in ("image", "image1") and combo.findText(layer.name) >= 0:
-                combo.setCurrentText(layer.name)
-            elif key == "roi" and combo.findText(ROI_LAYER) >= 0:
-                combo.setCurrentText(ROI_LAYER)
-        panel._run()
+        self.analysis.run_operation(name, {"image": layer.name, "image1": layer.name, "roi": ROI_LAYER})
 
     def quick_measure(self) -> None:
         """« Mesurer » d'ImageJ : les ROI dessinées s'il y en a, sinon l'image entière."""
@@ -1382,7 +1523,7 @@ class MainWindow(QMainWindow):
 
         layer = self._active_image_layer()
         if layer is None:
-            self.notify("Aucune image à calibrer")
+            self.notify("Ouvrez d'abord une image (double-clic dans la liste « Images »)")
             return
         current = float(layer.metadata.get("pixel_size_um") or 0.0)
         length_px = 0.0

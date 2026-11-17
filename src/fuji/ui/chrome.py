@@ -33,8 +33,8 @@ SECTIONS = (
     ("images", "Images", "gallery", False, ("microscope", "analyse")),
     ("analysis", "Outils", "ruler", False, ("analyse",)),
     ("layers", "Calques", "layers", False, ("analyse",)),
-    ("config", "Microscope", "sliders", True, ("microscope",)),
-    ("settings", "Réglages", "gear", True, ("microscope", "analyse")),
+    ("config", "Matériel", "sliders", True, ("microscope",)),
+    ("settings", "Préférences", "gear", True, ("microscope", "analyse")),
 )
 
 
@@ -65,7 +65,7 @@ class Sidebar(QWidget):
         super().__init__(parent)
         self.setObjectName("Sidebar")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setFixedWidth(80)
+        self.setFixedWidth(86)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(6, 10, 6, 10)
         lay.setSpacing(4)
@@ -281,7 +281,7 @@ class TopBar(QWidget):
         ThemeManager.get().changed.connect(self._retheme)
         self._retheme()
         # sur un petit écran, ces éléments disparaissent plutôt que d'élargir la fenêtre
-        # (le mode expert reste dans Réglages, le type de microscope dans Contrôle)
+        # (le mode expert reste dans Préférences, le type de microscope dans Contrôle)
         self._optional = (self.name, self.status, self.expert, self._separator)
         for w in self._optional:
             w.setMinimumWidth(1)

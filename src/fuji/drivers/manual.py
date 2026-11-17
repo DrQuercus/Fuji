@@ -51,7 +51,7 @@ def default_state_labels(spec: DeviceSpec, ctx: DriverContext) -> list[str]:
             "prompt",
             "str",
             "Consigne",
-            "Placez « {label} » sur {device}.",
+            "Mettez en place « {label} » ({device}).",
             advanced=True,
             help="{label} = position demandée, {device} = nom de l'élément",
         ),

@@ -108,7 +108,7 @@ def test_read_only_and_no_motion_policies(scope, tmp_path):
 
 
 def test_manual_actions_are_relayed_then_confirmed(controller, scope):
-    with pytest.raises(ManualActionRequired, match="Placez « 40x/0\\.65 »") as info:
+    with pytest.raises(ManualActionRequired, match="Mettez en place « 40x/0\\.65 »") as info:
         controller.set_objective("40x/0.65")
     assert "manual_done=true" in str(info.value)
     assert scope.objective.label == "10x/0.25"  # rien n'est supposé fait
@@ -320,7 +320,7 @@ def test_mcp_session_snap_analyse_and_report_errors(controller):
     assert json.loads(_text(out["mask"]))["resultats"][0]["type"] == "masque"
     assert [type(c).__name__ for c in out["view"].content] == ["TextContent", "ImageContent"]
     assert _is_error(out["too_far"]) and "au plus 5000 µm" in _text(out["too_far"])
-    assert _is_error(out["manual"]) and "Placez « 40x/0.65 »" in _text(out["manual"])
+    assert _is_error(out["manual"]) and "Mettez en place « 40x/0.65 »" in _text(out["manual"])
     assert not _is_error(out["confirmed"]) and json.loads(_text(out["confirmed"]))["objectif"] == "40x/0.65"
     assert json.loads(_text(out["moved"])) == {"x_um": 50.0, "y_um": 0.0}
     assert json.loads(out["state"].contents[0].text)["platine"]["x_um"] == 50.0

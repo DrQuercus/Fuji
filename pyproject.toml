@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fuji-microscopy"
-version = "0.8.1"
+version = "0.9.0"
 description = "Logiciel de microscopie : acquisition multi-microscopes, assistants d'alignement et analyse d'images (napari + Micro-Manager + Fiji)."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -31,7 +31,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # Interface graphique (napari + Qt)
-gui = ["napari[pyqt6]>=0.5", "magicgui>=0.8", "superqt>=0.6"]
+gui = ["napari[pyqt6]>=0.10,<0.11", "magicgui>=0.8", "superqt>=0.6"]
 # Compatibilité avec ~250 microscopes/périphériques via Micro-Manager
 micromanager = ["pymmcore-plus>=0.13"]
 # Pont vers Fiji / ImageJ (macros, plugins, Bio-Formats)
@@ -69,7 +69,7 @@ sources = ["src/fuji"]
 # L'application contient tout ce que propose « pip install fuji-microscopy[all] ».
 # (Liste à garder identique aux options de [project.optional-dependencies] : un test le vérifie.)
 requires = [
-    "napari[pyqt6]>=0.5",
+    "napari[pyqt6]>=0.10,<0.11",
     "magicgui>=0.8",
     "superqt>=0.6",
     "pymmcore-plus>=0.13",

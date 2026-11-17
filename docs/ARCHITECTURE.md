@@ -10,7 +10,7 @@
 ├────────────────────────────────────────────────────────────────────┤
 │ Assistants (fuji.assistants)   │ Analyse (fuji.analysis)           │
 │  Köhler, mise au point,        │  opérations calibrées (définitions│
-│  calibration, champ plat       │  d'ImageJ) + pont Fiji (PyImageJ) │
+│  calibration, éclairage        │  d'ImageJ) + pont Fiji (PyImageJ) │
 ├────────────────────────────────┴───────────────────────────────────┤
 │ Cœur (fuji.core) — AUCUNE dépendance à Qt                          │
 │  Microscope ← profil YAML · moteur d'acquisition (useq-schema)     │
@@ -63,7 +63,9 @@
 | `analysis/registration.py` | Déplacement entre deux images et confiance dans cette mesure |
 | `remote/controller.py` | Commandes sûres pour un pilotage extérieur (IA, scripts) : garde-fous, mémoire d'images, réponses en texte simple |
 | `remote/mcp_server.py` | Serveur MCP : expose le contrôleur à un assistant IA (stdio ou HTTP avec jeton) |
-| `assistants/` | Köhler, mise au point, calibration du pixel, champ plat |
+| `assistants/` | Köhler, mise au point, calibration du pixel, uniformité de l'éclairage |
+| `core/flatfield.py` | Image de référence (champ plat) : correction du fond à la sortie de la caméra |
+| `core/compose.py` | Panorama et profondeur de champ étendue en direct (moteurs de calcul) |
 | `analysis/` | Images calibrées, registre d'opérations, mesures ImageJ, pont Fiji |
 | `io/ome_tiff.py` | Écriture OME-TIFF en continu, métadonnées par plan |
 | `ui/theme.py`, `ui/icons.py` | Thème (palettes, accent, feuille de style générée), icônes SVG de Fuji |
@@ -190,7 +192,7 @@ par l'IA deviennent des calques, les consignes manuelles s'affichent à l'écran
 ## Contrôle à distance
 
 Ce qui existe : les moteurs peuvent être branchés sur un autre ordinateur (port
-`socket://…`), et le serveur MCP peut écouter sur le réseau avec un mot de passe.
+`socket://…`), et le serveur MCP peut écouter sur le réseau avec un jeton (mot de passe).
 
 Ce qui reste prévu : un petit serveur (sur le Raspberry Pi relié au microscope) qui
 expose toute l'API `Microscope` sur le réseau, et un pilote « distant » côté ordinateur

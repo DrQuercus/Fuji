@@ -40,6 +40,11 @@ class FrameMetadata:
         return asdict(self)
 
 
+def is_rgb(data: np.ndarray) -> bool:
+    """Vrai pour une image couleur telle que la livrent les caméras : (lignes, colonnes, 3 ou 4)."""
+    return data.ndim == 3 and data.shape[-1] in (3, 4)
+
+
 @dataclass
 class Frame:
     data: np.ndarray
@@ -47,7 +52,7 @@ class Frame:
 
     @property
     def is_rgb(self) -> bool:
-        return self.data.ndim == 3 and self.data.shape[-1] in (3, 4)
+        return is_rgb(self.data)
 
     @property
     def shape(self) -> tuple[int, ...]:

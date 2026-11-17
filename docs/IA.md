@@ -26,13 +26,13 @@ pip install -e ".[ia]"
 
 ### 1. Depuis la fenêtre de Fuji (le plus confortable)
 
-Dans Fuji : **Réglages → Assistant IA → « Serveur pour IA (MCP) actif »**.
+Dans Fuji : **Préférences → Assistant IA → « Serveur pour IA (MCP) actif »**.
 
-![Réglages : serveur pour IA actif](assistant-ia.png)
+![Préférences : serveur pour IA actif](assistant-ia.png)
 
 L'IA partage alors le microscope de la fenêtre : tu vois dans Fuji tout ce qu'elle fait
 (ses images apparaissent comme calques « IA — … », ses tableaux dans Résultats), et sur un
-microscope manuel les consignes (« Placez l'objectif 40x ») s'affichent à l'écran comme
+microscope manuel les consignes (« Mettez en place « 40x/0.65 » ») s'affichent à l'écran comme
 d'habitude.
 
 L'adresse du serveur est `http://127.0.0.1:8765/mcp` (seulement accessible depuis ton

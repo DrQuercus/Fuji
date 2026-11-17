@@ -298,7 +298,7 @@ class AcquisitionPanel(QWidget):
             seq = self.sequence()
             plan = plan_acquisition(self.m, seq, self.folder.text())
         except Exception as exc:
-            self.plan_label.setText(f"Séquence invalide : {exc}")
+            self.plan_label.setText(f"Ces réglages d'acquisition ne sont pas possibles : {exc}")
             return
         self.plan_label.setText(
             f"<b>{plan.n_frames}</b> image(s) · ≈ {plan.human_duration} · {plan.human_size}"
@@ -307,7 +307,7 @@ class AcquisitionPanel(QWidget):
         obj = self.m.objective
         if self.use_z.isChecked() and obj is not None:
             dz = axial_nyquist_um(obj.na, obj.immersion)
-            self._z_nyquist.setText(f"Pas conseillé pour {obj.label} : ≤ {dz:.2f} µm (Nyquist).")
+            self._z_nyquist.setText(f"Pas conseillé avec {obj.label} : {dz:.2f} µm au plus.")
         else:
             self._z_nyquist.setText("")
 
@@ -338,7 +338,9 @@ class AcquisitionPanel(QWidget):
             seq = self.sequence()
             plan = plan_acquisition(self.m, seq, self.folder.text())
         except Exception as exc:
-            QMessageBox.warning(self, "Acquisition", f"Séquence invalide : {exc}")
+            QMessageBox.warning(
+                self, "Acquisition", f"Ces réglages d'acquisition ne sont pas possibles : {exc}"
+            )
             return
         if plan.warnings:
             answer = QMessageBox.question(

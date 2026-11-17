@@ -238,7 +238,9 @@ def open_in_fiji(image: Image, fiji: str | Path | None = None) -> Path:
     if sys.platform == "darwin":
         cmd = ["open", "-a", str(app) if app else "Fiji", str(path)]
     elif app is None:
-        raise FileNotFoundError("Fiji introuvable : installe Fiji ou indique son dossier avec FUJI_FIJI_PATH")
+        raise FileNotFoundError(
+            "Fiji introuvable : installez-le, puis indiquez son dossier dans Préférences → Fiji / ImageJ"
+        )
     else:
         exe = _fiji_executable(app)
         cmd = [str(exe), str(path)]
