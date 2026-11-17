@@ -361,7 +361,7 @@ def test_napari_layer_and_view_buttons_work(window):
     assert viewer.dims.ndisplay == 3
     qt.viewerButtons.ndisplayButton.click()
     assert viewer.dims.ndisplay == 2
-    grid = getattr(viewer, "grid", None) or viewer.canvas.grid
+    grid = viewer.canvas.grid if hasattr(getattr(viewer, "canvas", None), "grid") else viewer.grid
     qt.viewerButtons.gridViewButton.click()
     assert grid.enabled
     assert qt.viewerButtons.consoleButton.isHidden()

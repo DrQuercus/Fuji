@@ -760,6 +760,10 @@ def test_live_compositions_by_hand_from_the_acquisition_section(window, qtbot):
     m.camera.set_property("Épaisseur de l'échantillon", 0.0)
     m.focus.move_to(0)
     compose.start("panorama")
+    # la « main » avance par à-coups de 250 ms : sur une machine lente, une pause à mi-chemin
+    # suffit à poser un champ (c'est voulu en vrai). Seuls les arrêts prévus apportent ici
+    # assez de surface nouvelle (≈ 54 %, contre 40 % au plus entre deux arrêts)
+    compose._engine.min_new = 0.45
     here = (0.0, 0.0)
     for n, stop in enumerate([(0.0, 0.0), (160.0, 0.0), (160.0, 120.0)], start=1):
         for a in (0.25, 0.5, 0.75, 1.0):  # la main pousse la lame : un mouvement continu

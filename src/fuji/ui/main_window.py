@@ -129,7 +129,8 @@ def fix_napari_buttons(qt_viewer: QtViewer) -> None:
         viewer.dims.ndisplay = 2 if viewer.dims.ndisplay == 3 else 3
 
     def toggle_grid() -> None:
-        grid = getattr(viewer, "grid", None) or viewer.canvas.grid
+        canvas = getattr(viewer, "canvas", None)  # napari ≥ 0.9 ; avant : viewer.grid
+        grid = canvas.grid if canvas is not None and hasattr(canvas, "grid") else viewer.grid
         grid.enabled = not grid.enabled
 
     slots = (
