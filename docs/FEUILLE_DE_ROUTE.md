@@ -132,11 +132,32 @@ après ce premier essai :
 - [x] Panneau de contrôle plus étroit (lampes, objectif et canal réorganisés) ; outils de
       dessin des ROI qui passent à la ligne
 
+## Version 0.8 (fait) — une analyse plus facile à comprendre
+
+- [x] **Barre d'affichage sous l'image** (espace Analyse), toujours présente : l'image
+      affichée (taille, type, échelle), son **histogramme** (plan courant) avec les deux
+      bornes du contraste à tirer à la souris, **min / max**, **Auto** (0,35 % saturés,
+      comme ImageJ), **Tout**, **gamma** et **couleur** (gris, vert, magenta, chaleur…).
+      Elle ne change que l'affichage : les mesures gardent les vraies valeurs
+- [x] **Outils rangés par tâche** : « Améliorer l'image », « Isoler les objets »,
+      « Retoucher un masque », « Compter et mesurer », « Intensités et profils »,
+      « Couleurs et canaux »… (12 menus), avec **une ligne d'explication sous chaque
+      outil** ; les mêmes menus dans la barre de menus « Analyse »
+- [x] **Une fiche par outil** : ce qu'il fait, quand l'utiliser, son équivalent ImageJ,
+      les détails techniques à la demande, puis les réglages et « Exécuter »
+- [x] **Démarches guidées**, étape par étape : compter et mesurer des cellules, mesurer
+      une surface ou une longueur, profil d'intensité, compter des spots, préparer une
+      figure, colocalisation, projection d'une pile Z. Chaque étape ouvre le bon outil
+      avec le bon calque ; pour le comptage, Fuji devine si les objets sont sombres (fond
+      clair) ou clairs (fluorescence)
+- [x] Recherche sans accents ni majuscules, dans les noms, les explications et les noms
+      ImageJ (« seuil », « compter », « Gaussian Blur »)
+
 ## Prochaines étapes
 
 ### 1. Valider sur ton matériel (priorité)
 
-Tout ce qui précède est vérifié par environ 240 tests automatiques, mais **sur du
+Tout ce qui précède est vérifié par environ 270 tests automatiques, mais **sur du
 matériel simulé**. Voici ce qui n'a jamais pu être essayé et reste à valider :
 
 - [x] **La vraie caméra** : la E3ISPM08300KPD se connecte et l'image arrive (Mac)

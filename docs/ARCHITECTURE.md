@@ -74,6 +74,9 @@
 | `core/compose.py` | Images composées en direct : profondeur de champ étendue (`FocusStacker`), panorama à la main (`LiveMosaic`) |
 | `io/captures.py` | Images prises : enregistrement automatique par jour, vignettes, résumés |
 | `ui/gallery.py` | Liste « Images », commune aux espaces Microscope et Analyse |
+| `ui/display_bar.py` | Barre d'affichage de l'espace Analyse : histogramme, contraste, gamma, couleur |
+| `ui/panels/analysis_panel.py`, `ui/panels/tool_menu.py` | Panneau « Outils » : menus par tâche, fiche de chaque outil, démarches guidées |
+| `analysis/guide.py` | Mode d'emploi des outils : menus, résumés, « quand l'utiliser », démarches |
 | `ui/compose_panel.py` | Compositions en direct dans la section Acquisition (calcul dans un fil de travail) |
 | `ui/flow.py`, `ui/prefs.py` | Disposition qui passe à la ligne (petits écrans) ; préférences (isolables pour les tests) |
 | `ui/selftest.py` | Essai automatique de l'installation (`fuji selftest`) |
@@ -132,7 +135,10 @@ def mon_filtre(image: Image, force: Annotated[float, Param(min=0, max=10)] = 1.0
     return image.with_data(image.data * force, name=f"{image.name} (filtré)")
 ```
 
-L'opération apparaît automatiquement dans le panneau « Analyse » avec son formulaire.
+L'opération apparaît automatiquement dans le panneau « Outils » avec son formulaire, dans
+le menu « Autres outils ». Pour la ranger dans un menu par tâche et lui donner une
+explication en langage courant, ajoutez-la à `MENUS` et `HELP` dans `fuji/analysis/guide.py`
+(sinon la première ligne de sa description sert d'explication).
 
 Les entrées annotées `Image`, `Labels`, `Rois` ou `Points` sont des calques (image, masque,
 formes, points) ; les autres paramètres deviennent des réglages. Une opération reçoit un

@@ -4,7 +4,7 @@ Logiciel de microscopie qui réunit le meilleur de **Micro-Manager** (piloter le
 matériel), **napari** (afficher les images) et **Fiji/ImageJ** (analyser), dans une
 interface propre qui s'adapte au microscope.
 
-> Projet en développement (version 0.7). Voir
+> Projet en développement (version 0.8). Voir
 > [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) et [docs/FEUILLE_DE_ROUTE.md](docs/FEUILLE_DE_ROUTE.md).
 
 ![Interface de Fuji : espace Microscope, live sur le microscope simulé](docs/interface.png)
@@ -18,9 +18,10 @@ d'image pour ne pas mélanger prise de vue et analyse :
   au point) reste ouvert à gauche de l'image pendant qu'on se sert, à droite, des
   Assistants, de l'Acquisition, de la liste des Images ou de la configuration. Sous
   l'image, l'**histogramme en direct** (alerte de saturation).
-- **Analyse** : la liste des **Images** reste ouverte à gauche ; à droite, les **outils**
-  (ROI, opérations, mesures) et les calques ; en bas, les résultats. Le live s'y met en
-  pause et reprend au retour.
+- **Analyse** : la liste des **Images** reste ouverte à gauche ; sous l'image, la
+  **barre d'affichage** (histogramme, contraste, gamma, couleur) ; à droite, les
+  **outils** et les calques ; en bas, les résultats. Le live s'y met en pause et reprend
+  au retour.
 
 Chaque panneau se replie : bouton de sa section dans la barre de gauche (Contrôle,
 Images), ou Ctrl+Shift+B à gauche et Ctrl+B à droite. Contrôle replié, la barre sous
@@ -37,6 +38,27 @@ panneaux, 750 en repliant celui de gauche (la barre du haut se compacte, la barr
 l'image passe à la ligne). Thèmes sombre ou clair, 7 couleurs
 d'accent, 3 tailles de texte. Raccourcis : Ctrl+1 Microscope, Ctrl+2 Analyse, Ctrl+3
 Images, Ctrl+L live, Ctrl+K capture, Ctrl+B replier le panneau.
+
+## Analyser sans être spécialiste
+
+Les outils sont rangés **par ce que l'on veut faire** — améliorer l'image, isoler les
+objets, retoucher un masque, compter et mesurer, intensités et profils, couleurs et
+canaux… — avec **une ligne d'explication sous chaque outil**. Un clic ouvre sa **fiche** :
+ce qu'il fait, quand l'utiliser, son équivalent ImageJ, puis ses réglages, l'aperçu en
+direct et « Exécuter ». Les mêmes menus sont dans la barre de menus « Analyse ».
+
+![Les outils d'analyse rangés par tâche, avec la barre d'affichage sous l'image](docs/outils.png)
+
+Pour débuter, les **démarches guidées** enchaînent les bons outils, étape par étape :
+compter et mesurer des cellules, mesurer une surface ou une longueur, tracer un profil,
+compter des spots, préparer une figure, colocalisation, projection d'une pile Z.
+
+![Démarche guidée : compter des cellules, étape du seuillage avec l'aperçu](docs/demarche.png)
+
+La **barre d'affichage**, toujours sous l'image, règle ce que l'on voit sans toucher aux
+pixels : histogramme du plan affiché (on tire les bornes à la souris), min / max,
+**Auto** (comme ImageJ), **Tout**, gamma et couleur (gris, vert, magenta, chaleur…). Les
+mesures utilisent toujours les vraies valeurs.
 
 ![Espace Analyse : mesure d'une ROI](docs/analyse.png)
 

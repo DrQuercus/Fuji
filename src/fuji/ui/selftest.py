@@ -141,7 +141,11 @@ def run(report: str | None = None, screenshot: str | None = None) -> int:
         layer = win.viewer.layers[info.name]
         if layer.metadata.get("pixel_size_um") != info.pixel_size_um:
             raise RuntimeError("calibration perdue à la réouverture")
-        return f"espace {win.mode}, calque {info.name}, {layer.data.shape}"
+        if win.display_bar.layer is not layer:
+            raise RuntimeError("la barre d'affichage ne suit pas l'image ouverte")
+        win.display_bar.auto_contrast()
+        lo, hi = (round(float(v)) for v in layer.contrast_limits)
+        return f"espace {win.mode}, calque {info.name}, {layer.data.shape}, contraste auto {lo}–{hi}"
 
     def analysis() -> str:
         from fuji.analysis import Image

@@ -597,8 +597,9 @@ def test_every_operation_builds_its_form(window):
         panel.select_operation(op.name)
         assert panel._op is op and set(panel._inputs) == {spec.name for spec in op.inputs}
         assert {w.name for w in panel._params} == {p.name for p in op.params}
+    panel.show_menu()
     panel.search.setText("threshold")  # recherche par le nom de la commande ImageJ
-    names = [panel.list.item(i).data(256) for i in range(panel.list.count()) if panel.list.item(i).data(256)]
+    names = panel.visible_operations()
     assert "Seuillage automatique" in names and "Seuillage local" in names and "Flou gaussien" not in names
 
 

@@ -48,6 +48,7 @@ from superqt.utils import create_worker
 
 from fuji import __version__
 from fuji.analysis import Table
+from fuji.analysis.guide import MENUS, RECIPES, help_of
 from fuji.analysis.imagej import ImageJBridge
 from fuji.core.frame import Frame
 from fuji.core.microscope import Microscope
@@ -59,6 +60,7 @@ from .components import PanelHeader, icon_button
 from .compose_panel import ComposePanel
 from .config.editor import ConfigEditor
 from .config.wizard import NewMicroscopeDialog
+from .display_bar import DisplayBar
 from .gallery import GalleryPanel
 from .live import LiveController, contrast_for, units_for
 from .panels.acquisition_panel import AcquisitionPanel
@@ -79,7 +81,7 @@ SUBTITLES = {
     "control": "Caméra, optique, éclairage, platine et mise au point.",
     "assistants": "Köhler, mise au point, calibration du pixel, éclairage.",
     "acquisition": "Time-lapse, piles Z, canaux, positions → OME-TIFF.",
-    "analysis": "Opérations calibrées (définitions d'ImageJ) et pont vers Fiji.",
+    "analysis": "Rangés par tâche, chacun avec son explication. Démarches guidées pour débuter.",
     "layers": "Images affichées et réglages d'affichage.",
     "config": "Configuration complète et choix du microscope.",
     "settings": "Apparence, Fiji, caméras ToupTek, dossiers.",
@@ -126,7 +128,9 @@ class LayersPanel(QWidget):
         lay.addWidget(qt_viewer.layerButtons)
         lay.addWidget(qt_viewer.layers, 2)
         lay.addWidget(qt_viewer.viewerButtons)
-        lay.addWidget(qt_viewer.controls, 3)
+        # les réglages d'un calque (masque, formes) sont hauts : ils défilent plutôt que
+        # d'imposer leur hauteur à la fenêtre (elle doit tenir sur un écran de portable)
+        lay.addWidget(_scroll(qt_viewer.controls), 3)
 
 
 class MainWindow(QMainWindow):
@@ -196,6 +200,10 @@ class MainWindow(QMainWindow):
             pages.append(page_lay)
         self.canvas_layout = pages[0]  # la barre rapide s'y ajoute (espace Microscope)
         self.quickbar: QuickBar | None = None
+        # espace Analyse : histogramme et contraste de l'image affichée, toujours sous l'image
+        self.display_bar = DisplayBar(self.viewer)
+        self.display_bar.message.connect(self.notify)
+        pages[1].addWidget(self.display_bar)
 
         # panneau de gauche : toujours ouvert (Contrôle, ou Images en analyse)
         self.left = QWidget()
@@ -746,6 +754,22 @@ class MainWindow(QMainWindow):
         )
 
         m_an = mb.addMenu("&Analyse")
+        # les outils rangés par tâche, comme dans le panneau « Outils » : chacun ouvre sa fiche
+        m_recipes = m_an.addMenu("Démarches guidées")
+        for recipe in RECIPES:
+            act = QAction(recipe.title, self)
+            act.setStatusTip(recipe.intro)
+            act.triggered.connect(lambda _=False, k=recipe.key: self.open_recipe(k))
+            m_recipes.addAction(act)
+        m_an.addSeparator()
+        for menu in MENUS:
+            sub = m_an.addMenu(menu.title)
+            for name in menu.operations:
+                act = QAction(name, self)
+                act.setStatusTip(help_of(name).summary)
+                act.triggered.connect(lambda _=False, n=name: self.open_tool(n))
+                sub.addAction(act)
+        m_an.addSeparator()
         # mêmes gestes que dans ImageJ : mesurer, histogramme, profil sur l'image active
         m_an.addAction(self._action("Mesurer", self.quick_measure, "Ctrl+M"))
         m_an.addAction(self._action("Histogramme", lambda: self.quick_operation("Histogramme"), "Ctrl+H"))
@@ -1171,6 +1195,20 @@ class MainWindow(QMainWindow):
             return active
         images = [ly for ly in reversed(self.viewer.layers) if isinstance(ly, ImageLayer)]
         return images[0] if images else None
+
+    def open_tool(self, name: str) -> None:
+        """Ouvre la fiche d'un outil d'analyse (menu « Analyse »)."""
+        if self.mode != "analyse":
+            self.set_mode("analyse", "analysis")
+        self.sidebar.select("analysis")
+        self.analysis.select_operation(name)
+
+    def open_recipe(self, key: str) -> None:
+        """Ouvre une démarche guidée (menu « Analyse »)."""
+        if self.mode != "analyse":
+            self.set_mode("analyse", "analysis")
+        self.sidebar.select("analysis")
+        self.analysis.open_recipe(key)
 
     def quick_operation(self, name: str) -> None:
         """Lance une opération sur l'image active, avec les ROI dessinées s'il y en a."""

@@ -11,7 +11,8 @@ voisinages, conversions de type, définitions des mesures).
 
 | Dans ImageJ | Dans Fuji |
 |---|---|
-| Barre d'outils : rectangle, ovale, polygone, ligne, points | les mêmes outils, en haut du panneau **Analyse** |
+| Menus Process / Analyze / Image | les outils rangés **par tâche** (« Améliorer l'image », « Isoler les objets », « Compter et mesurer »…), dans le panneau **Outils** et dans le menu **Analyse** ; chaque fiche indique la commande ImageJ correspondante |
+| Barre d'outils : rectangle, ovale, polygone, ligne, points | les mêmes outils, en haut du panneau **Outils** (« Dessiner : ») |
 | ROI Manager | le calque « ROI » : chaque forme est une région, modifiable et supprimable |
 | `M` (Measure) | **Analyse → Mesurer** (`Ctrl+M`) : les ROI dessinées, sinon l'image entière |
 | `H` (Histogram) | **Analyse → Histogramme** (`Ctrl+H`) |
@@ -19,10 +20,11 @@ voisinages, conversions de type, définitions des mesures).
 | Case « Preview » des filtres | case **Aperçu en direct** |
 | « Process all slices ? » | case **Toute la pile** |
 | Set Scale | **Analyse → Définir l'échelle…** (à partir d'une ligne de longueur connue) |
-| Command Finder (`L`) | la recherche du panneau : elle comprend aussi les noms anglais d'ImageJ (« threshold », « z project »…) |
+| Command Finder (`L`) | la recherche du panneau : elle comprend aussi les noms anglais d'ImageJ (« threshold », « z project »…), sans tenir compte des accents |
 | Flatten + Scale Bar | **Fichier → Exporter la vue (PNG)** : image, ROI et barre d'échelle |
 | Results | le volet **Résultats** : tableau, graphique, export CSV, copie vers Excel |
-| Brightness/Contrast, LUT, canaux | les réglages du calque (section **Calques**) |
+| Brightness/Contrast (Auto, Reset), LUT | la **barre d'affichage** sous l'image : histogramme et bornes à la souris, min / max, **Auto** (0,35 % saturés), **Tout**, gamma, couleur ; comme dans ImageJ tant qu'on ne clique pas sur « Apply », seules les couleurs affichées changent |
+| Canaux, opacité, mélange | les réglages du calque (section **Calques**) |
 
 Les mesures sont en µm dès que l'image est calibrée (les captures de Fuji le sont toujours).
 

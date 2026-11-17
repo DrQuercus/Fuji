@@ -231,6 +231,19 @@ QLabel {{ background: transparent; }}
 #Card {{ background: {p.surface2}; border: 1px solid {p.border}; border-radius: 12px; }}
 #Card QLabel#CardTitle {{ font-weight: 700; }}
 #Separator {{ background: {p.border}; border: none; max-height: 1px; min-height: 1px; }}
+
+/* ---------- menus des outils d'analyse ---------- */
+#ToolRow, #MenuHeader {{ background: transparent; border: 1px solid transparent; border-radius: 8px; }}
+#ToolRow:hover, #MenuHeader:hover {{ background: {p.surface3}; border-color: {p.border}; }}
+#MenuHeader QLabel#ToolTitle {{ font-weight: 700; }}
+QLabel#ToolTitle {{ font-weight: 600; }}
+#Step {{ background: {p.surface2}; border: 1px solid {p.border}; border-radius: 10px; }}
+#StepCurrent {{ background: {p.accent_soft}; border: 1px solid {p.accent}; border-radius: 10px; }}
+QLabel#StepNumber, QLabel#StepNumberDone {{ min-width: 22px; max-width: 22px; min-height: 22px;
+    max-height: 22px; border-radius: 11px; font-weight: 700; }}
+QLabel#StepNumber {{ background: {p.surface3}; color: {p.text}; }}
+QLabel#StepNumberDone {{ background: {p.success}; color: #04130a; }}
+#Banner {{ background: {p.accent_soft}; border: 1px solid {p.accent}; border-radius: 10px; }}
 #VSeparator {{ background: {p.border}; border: none; max-width: 1px; min-width: 1px; }}
 
 /* ---------- textes ---------- */

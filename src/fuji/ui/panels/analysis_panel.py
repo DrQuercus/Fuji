@@ -1,8 +1,17 @@
-"""Panneau « Analyse » : toutes les opérations, avec formulaires générés automatiquement.
+"""Panneau « Outils » : toutes les opérations, rangées par tâche, avec leur mode d'emploi.
+
+Trois pages :
+
+- les **menus** (« Améliorer l'image », « Isoler les objets », « Compter et mesurer »…),
+  avec une ligne d'explication par outil, la recherche et les démarches guidées ;
+- la **fiche** d'un outil : ce qu'il fait, quand l'utiliser, son équivalent ImageJ, puis
+  ses réglages (construits à partir de la signature Python de l'opération), l'aperçu en
+  direct et « Exécuter » ;
+- une **démarche guidée** : les étapes à suivre pour un besoin courant (compter des
+  cellules, mesurer une surface…), chacune ouvrant le bon outil.
 
 Chaque opération du registre (y compris celles ajoutées par des extensions) apparaît
-ici ; ses réglages sont construits à partir de sa signature Python. Les calques napari
-servent d'entrées et de sorties :
+ici. Les calques napari servent d'entrées et de sorties :
 
 =================  =========================================================
 calque             rôle
@@ -33,24 +42,24 @@ from qtpy.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
-    QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 from superqt.utils import create_worker
 
 from fuji.analysis import Image, Labels, Points, Rois, Table, list_operations
+from fuji.analysis.guide import GUESS, RECIPES, Recipe, help_of
 from fuji.analysis.imagej import open_in_fiji
 from fuji.analysis.registry import Operation, combine_planes
 
-from ..components import icon_button
+from ..components import button, icon_button, label, separator
 from ..flow import FlowLayout
-from ..widgets import hint_label
+from .tool_menu import RecipePage, ToolMenu
 
 _NONE = "(aucune)"
 ROI_LAYER = "ROI"
@@ -194,14 +203,19 @@ class AnalysisPanel(QWidget):
         self._params: Container | None = None
         self._busy = False
         self._preview_pending = False
+        self._recipe: Recipe | None = None
+        self._step = 0
+        self._done: set[int] = set()
         lay = QVBoxLayout(self)
         lay.setContentsMargins(6, 6, 6, 6)
+        lay.setSpacing(8)
 
         # outils de dessin des ROI (ils agissent sur un calque de formes ou de points) ; la
         # rangée passe à la ligne si le panneau est étroit
         tools_box = QWidget()
         tools = FlowLayout(tools_box, spacing=2, line_spacing=2)
         tools.setContentsMargins(0, 0, 0, 0)
+        tools.addWidget(label("Dessiner :", "hint", wrap=False))
         for icon_name, tip, kind, mode in _TOOLS:
             b = icon_button(icon_name, tip)
             b.clicked.connect(lambda _=False, k=kind, m=mode: self.set_tool(k, m))
@@ -212,22 +226,65 @@ class AnalysisPanel(QWidget):
         policy = tools_box.sizePolicy()
         policy.setHeightForWidth(True)
         tools_box.setSizePolicy(policy)
+        tools_box.setToolTip("Dessiner sur l'image : régions (ROI), lignes, points")
         lay.addWidget(tools_box)
 
-        self.search = QLineEdit()
-        self.search.setPlaceholderText("Rechercher (ex. seuil, flou, profil, Threshold, Z Project)")
-        self.search.textChanged.connect(self._fill_list)
-        lay.addWidget(self.search)
-        self.list = QListWidget()
-        self.list.setMinimumHeight(170)
-        self.list.setMaximumHeight(260)
-        self.list.currentItemChanged.connect(self._select)
-        lay.addWidget(self.list)
-        self.desc = hint_label()
-        lay.addWidget(self.desc)
+        # page 1 : les menus ------------------------------------------------------
+        self.menu_page = QWidget()
+        mlay = QVBoxLayout(self.menu_page)
+        mlay.setContentsMargins(0, 0, 0, 0)
+        mlay.setSpacing(8)
+        self.menu = ToolMenu()
+        self.menu.operation_chosen.connect(self.select_operation)
+        self.menu.recipe_chosen.connect(self.open_recipe)
+        self.search = self.menu.search
+        mlay.addWidget(self.menu)
+        fiji = QPushButton("Ouvrir le calque sélectionné dans Fiji")
+        fiji.clicked.connect(self._open_in_fiji)
+        mlay.addWidget(fiji)
+
+        # page 2 : la fiche d'un outil -------------------------------------------------
+        self.op_page = QWidget()
+        olay = QVBoxLayout(self.op_page)
+        olay.setContentsMargins(0, 0, 0, 0)
+        olay.setSpacing(6)
+        self.back_btn = button("Tous les outils", "left", object_name="ghost")
+        self.back_btn.clicked.connect(self._back)
+        olay.addWidget(self.back_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        self.banner = QFrame()
+        self.banner.setObjectName("Banner")
+        self.banner.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        blay = QVBoxLayout(self.banner)
+        blay.setContentsMargins(10, 8, 10, 8)
+        blay.setSpacing(6)
+        self.banner_text = label("")
+        blay.addWidget(self.banner_text)
+        self.next_btn = button("Étape suivante", "right")
+        self.next_btn.clicked.connect(self.next_step)
+        blay.addWidget(self.next_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        self.banner.hide()
+        olay.addWidget(self.banner)
+        self.op_title = label("", "step")
+        olay.addWidget(self.op_title)
+        self.desc = label("")
+        olay.addWidget(self.desc)
+        self.when = label("", "hint")
+        olay.addWidget(self.when)
+        self.imagej_label = label("", "faint")
+        olay.addWidget(self.imagej_label)
+        self.details_btn = button("Plus de détails", "info", object_name="ghost")
+        self.details_btn.setCheckable(True)
+        self.details_btn.toggled.connect(self._toggle_details)
+        olay.addWidget(self.details_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        self.details = label("", "hint")
+        self.details.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.details.hide()
+        olay.addWidget(self.details)
+        olay.addWidget(separator())
         self.form_host = QWidget()
         self.form = QFormLayout(self.form_host)
-        lay.addWidget(self.form_host)
+        self.form.setContentsMargins(0, 0, 0, 0)
+        olay.addWidget(self.form_host)
         self.preview = QCheckBox("Aperçu en direct")
         self.preview.setToolTip(
             "Montre le résultat sur le plan affiché pendant le réglage (comme « Preview » d'ImageJ)"
@@ -241,20 +298,27 @@ class AnalysisPanel(QWidget):
         options.addWidget(self.preview)
         options.addWidget(self.whole_stack)
         options.addStretch(1)
-        lay.addLayout(options)
+        olay.addLayout(options)
         self.run_btn = QPushButton("Exécuter")
         self.run_btn.setObjectName("primary")
         self.run_btn.clicked.connect(self._run)
-        lay.addWidget(self.run_btn)
-        fiji = QPushButton("Ouvrir le calque sélectionné dans Fiji")
-        fiji.clicked.connect(self._open_in_fiji)
-        lay.addWidget(fiji)
+        olay.addWidget(self.run_btn)
+
+        # page 3 : une démarche guidée ------------------------------------------------
+        self.recipe_page = RecipePage()
+        self.recipe_page.back.connect(self.show_menu)
+        self.recipe_page.open_step.connect(self._open_step)
+        # trois pages, une seule visible (les pages cachées ne prennent pas de place)
+        self.pages = [self.menu_page, self.op_page, self.recipe_page]
+        for page in self.pages:
+            lay.addWidget(page)
         lay.addStretch(1)
+
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
         self._preview_timer.setInterval(350)
         self._preview_timer.timeout.connect(self._run_preview)
-        self._fill_list()
+        self._show_page(self.menu_page)
         self._update_options()
         viewer.layers.events.inserted.connect(self._refresh_inputs)
         viewer.layers.events.removed.connect(self._refresh_inputs)
@@ -311,8 +375,7 @@ class AnalysisPanel(QWidget):
         """En quittant la section : la souris redevient « déplacer / zoomer » et l'aperçu en
         direct s'arrête (sinon l'outil resterait actif ailleurs)."""
         self.set_tool("", "")
-        if self.preview.isChecked():
-            self.preview.setChecked(False)
+        self._stop_preview()
 
     def clear_rois(self) -> None:
         for name in (ROI_LAYER, POINTS_LAYER):
@@ -320,49 +383,164 @@ class AnalysisPanel(QWidget):
                 layer = self.viewer.layers[name]
                 layer.data = [] if isinstance(layer, ShapesLayer) else np.zeros((0, layer.ndim))
 
-    # ---------------------------------------------------------------- liste
-    def _fill_list(self) -> None:
-        text = self.search.text().strip().lower()
-        self.list.blockSignals(True)
-        self.list.clear()
-        current_cat = None
-        for op in list_operations():
-            hay = f"{op.name} {op.category} {op.description} {op.imagej or ''}".lower()
-            if text and text not in hay:
-                continue
-            if op.category != current_cat:
-                current_cat = op.category
-                header = QListWidgetItem(op.category.upper())
-                header.setFlags(Qt.ItemFlag.NoItemFlags)  # titre de catégorie
-                self.list.addItem(header)
-            item = QListWidgetItem("   " + op.name)
-            item.setData(256, op.name)
-            if op.imagej:
-                item.setToolTip(f"ImageJ : {op.imagej}")
-            self.list.addItem(item)
-        self.list.blockSignals(False)
+    # ---------------------------------------------------------------- pages
+    def _show_page(self, page: QWidget) -> None:
+        """Affiche une page et revient en haut du panneau."""
+        for w in self.pages:
+            w.setVisible(w is page)
+        parent = self.parentWidget()
+        while parent is not None and not isinstance(parent, QScrollArea):
+            parent = parent.parentWidget()
+        if parent is not None:
+            parent.verticalScrollBar().setValue(0)
 
-    def select_operation(self, name: str) -> None:
-        """Sélectionne une opération par son nom (menus, tests)."""
-        self.search.clear()
-        for i in range(self.list.count()):
-            if self.list.item(i).data(256) == name:
-                self.list.setCurrentRow(i)
-                return
-        raise KeyError(name)
+    def current_page(self) -> str:
+        """« menu », « operation » ou « recipe »."""
+        if not self.menu_page.isHidden():
+            return "menu"
+        return "operation" if not self.op_page.isHidden() else "recipe"
 
-    def _select(self, item: QListWidgetItem | None, _prev: Any = None) -> None:
-        if item is None or item.data(256) is None:
-            return
-        op = next(o for o in list_operations() if o.name == item.data(256))
+    def show_menu(self) -> None:
+        """Retour aux menus (l'aperçu en direct s'arrête)."""
+        self._recipe = None
+        self._stop_preview()
+        if self._op is not None:
+            self.menu.open_menu_of(self._op.name)
+        self._show_page(self.menu_page)
+
+    def _back(self) -> None:
+        if self._recipe is not None:
+            self._stop_preview()
+            self._show_recipe_page()
+        else:
+            self.show_menu()
+
+    def _stop_preview(self) -> None:
+        self._preview_timer.stop()
+        if self.preview.isChecked():
+            self.preview.setChecked(False)
+        self._clear_preview()
+
+    def select_operation(self, name: str, *, in_recipe: bool = False) -> None:
+        """Ouvre la fiche d'une opération (menus, démarches, raccourcis, tests)."""
+        op = next((o for o in list_operations() if o.name == name), None)
+        if op is None:
+            raise KeyError(name)
+        if not in_recipe:
+            self._recipe = None
         self._clear_preview()
         self._op = op
-        text = op.description.split("\n\n")[0]
-        if op.imagej:
-            text += f"\n\nÉquivalent ImageJ : {op.imagej}"
-        self.desc.setText(text)
+        info = help_of(op.name, op.description)
+        self.op_title.setText(op.name)
+        self.desc.setText(info.summary + ".")
+        self.when.setText(f"Quand l'utiliser : {info.when}" if info.when else "")
+        self.when.setVisible(bool(info.when))
+        self.imagej_label.setText(f"Équivalent ImageJ : {op.imagej}" if op.imagej else "")
+        self.imagej_label.setVisible(bool(op.imagej))
+        self.details.setText(op.description.strip())
+        self.details_btn.setVisible(bool(op.description.strip()))
+        self.details_btn.setChecked(False)
         self._build_form(op)
+        self._update_banner()
+        self._show_page(self.op_page)
         self._schedule_preview()
+
+    def _toggle_details(self, on: bool) -> None:
+        self.details.setVisible(on)
+        self.details_btn.setText("Moins de détails" if on else "Plus de détails")
+        self._show_page(self.op_page)
+
+    # ---------------------------------------------------------------- démarches
+    def open_recipe(self, key: str) -> None:
+        """Ouvre une démarche guidée à sa première étape."""
+        recipe = next(r for r in RECIPES if r.key == key)
+        self._stop_preview()
+        self._recipe, self._step, self._done = recipe, 0, set()
+        self._show_recipe_page()
+
+    def _show_recipe_page(self) -> None:
+        assert self._recipe is not None
+        self.recipe_page.show_recipe(self._recipe, self._step, self._done)
+        self._show_page(self.recipe_page)
+
+    def _open_step(self, index: int) -> None:
+        assert self._recipe is not None
+        step = self._recipe.steps[index]
+        self._step = index
+        if step.operation:
+            self.select_operation(step.operation, in_recipe=True)
+            for name, value in step.params:
+                widget = next((w for w in self._params or [] if w.name == name), None)
+                if widget is None:
+                    continue
+                if value == GUESS and name == "objects":
+                    value = self._guess_objects()
+                    if value is None:
+                        continue
+                    self.message.emit(
+                        f"Objets « {value} » : le fond de l'image est plutôt "
+                        + ("clair" if value == "sombres" else "sombre")
+                    )
+                widget.value = value
+        elif step.tool:
+            self.set_tool(*step.tool)
+            self._done.add(index)
+            self._step = min(index + 1, len(self._recipe.steps) - 1)
+            self._show_recipe_page()
+
+    def next_step(self) -> None:
+        """Passe à l'étape suivante de la démarche en cours."""
+        if self._recipe is None:
+            return
+        self._stop_preview()
+        self._done.add(self._step)
+        following = self._step + 1
+        if following >= len(self._recipe.steps):
+            self.message.emit(f"Démarche « {self._recipe.title} » terminée")
+            self._show_recipe_page()
+            return
+        self._step = following
+        if self._recipe.steps[following].operation:
+            self._open_step(following)
+        else:
+            self._show_recipe_page()
+
+    def _guess_objects(self) -> str | None:
+        """« sombres » si le fond de l'image est clair (fond clair, coloration), « claires »
+        sinon (fluorescence) : la plupart des pixels appartiennent au fond."""
+        layer = self._primary_layer()
+        if layer is None:
+            return None
+        data, _ = displayed_plane(layer, self.viewer)
+        data = np.asarray(data, dtype=np.float64)
+        if _is_rgb(layer):
+            data = data[..., :3].mean(axis=-1)
+        step = max(1, int(np.sqrt(data.size / 100_000)))
+        sample = data[::step, ::step]
+        lo, mid, hi = np.percentile(sample, (1, 50, 99))
+        if hi <= lo:
+            return None
+        return "sombres" if mid > (lo + hi) / 2 else "claires"
+
+    def _update_banner(self, done: bool = False) -> None:
+        recipe = self._recipe
+        if recipe is None or self._op is None:
+            self.banner.hide()
+            self.back_btn.setText("Tous les outils")
+            return
+        self.back_btn.setText("Étapes de la démarche")
+        n, i = len(recipe.steps), self._step
+        text = f"<b>{recipe.title}</b><br>Étape {i + 1} sur {n} : {recipe.steps[i].text}"
+        if done:
+            text += "<br>✓ Fait. Vérifiez le résultat, puis passez à la suite."
+        self.banner_text.setText(text)
+        last = i + 1 >= n
+        self.next_btn.setText("Terminer la démarche" if last else "Étape suivante")
+        self.banner.show()
+
+    def visible_operations(self) -> list[str]:
+        """Outils affichés dans les menus (après la recherche)."""
+        return self.menu.visible_operations()
 
     # ------------------------------------------------------------- formulaire
     def _build_form(self, op: Operation) -> None:
@@ -389,7 +567,8 @@ class AnalysisPanel(QWidget):
                 opts["step"] = p.meta.step
             if p.meta.choices:
                 opts["choices"] = list(p.meta.choices)
-            label = p.label.rstrip("_") + (f" ({p.meta.unit})" if p.meta.unit else "")
+            label = p.label.rstrip("_")
+            label = label[:1].upper() + label[1:] + (f" ({p.meta.unit})" if p.meta.unit else "")
             kwargs: dict[str, Any] = {"value": p.default, "label": label, "name": p.name, "options": opts}
             if p.meta.multiline:
                 kwargs["widget_type"] = "TextEdit"
@@ -476,7 +655,9 @@ class AnalysisPanel(QWidget):
             name = self._inputs[spec.name].currentText()
             if not name or name == _NONE:
                 if not spec.optional:
-                    kind = "une ROI (outils en haut du panneau)" if spec.kind is Rois else "un calque"
+                    kind = (
+                        "une ROI (outils de dessin en haut du panneau)" if spec.kind is Rois else "un calque"
+                    )
                     label = _INPUT_LABELS.get(spec.name, spec.name)
                     raise ValueError(f"Choisissez {kind} pour « {label} »")
                 chosen.append((spec, None))
@@ -632,6 +813,9 @@ class AnalysisPanel(QWidget):
                 self.viewer.layers.selection.active = selected
             return
         self.message.emit(f"{op.name} terminé")
+        if self._recipe is not None and op is self._op:
+            self._done.add(self._step)
+            self._update_banner(done=True)
 
     def _add_layer(self, item: Any, offset: tuple[float, float], prefix: str) -> None:
         px = item.pixel_size_um or 1.0
