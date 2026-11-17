@@ -12,7 +12,8 @@ Il y a un `.dmg` par type de processeur. Menu Pomme (en haut à gauche) → « �
 | **Puce** Apple M1, M2, M3, M4… | `Fuji-…-macOS-arm64.dmg` |
 | **Processeur** Intel | `Fuji-…-macOS-x86_64.dmg` |
 
-Il faut macOS 13 (Ventura) ou plus récent.
+Il faut macOS 13 (Ventura) ou plus récent : c'est ce qu'exige Qt, la bibliothèque qui
+dessine la fenêtre. Chaque fichier pèse environ 230 Mo.
 
 ## 2. Télécharger
 

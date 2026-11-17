@@ -218,9 +218,13 @@ profils fournis.
 ## État de validation
 
 Le code a été entièrement relu et chaque défaut corrigé est couvert par un test
-(environ 230 tests). Tout cela tourne sur du **matériel simulé** : la vraie caméra ToupTek,
-macOS, de vrais moteurs, une vraie conversation avec une IA et la comparaison directe avec
-ImageJ restent à valider — voir [la feuille de route](docs/FEUILLE_DE_ROUTE.md).
+(environ 240 tests, lancés à chaque modification sous Linux **et sur macOS**). L'application
+Mac est construite puis essayée automatiquement sur des Mac de GitHub (processeurs Apple
+et Intel) avant d'être proposée au téléchargement.
+
+Tout cela tourne sur du **matériel simulé** : la vraie caméra ToupTek, de vrais moteurs,
+une vraie conversation avec une IA et la comparaison directe avec ImageJ restent à
+valider — voir [la feuille de route](docs/FEUILLE_DE_ROUTE.md).
 
 Les fonctions d'ImageJ recodées sont vérifiées contre les formules d'ImageJ, pas encore
 contre ImageJ lui-même : le test `tests/test_imagej_parity.py` fait cette comparaison sur

@@ -90,19 +90,28 @@ Détails dans [MOTORISATION.md](MOTORISATION.md) et [IA.md](IA.md).
       de travail fermé, consignes manuelles jamais supposées faites, arrêt d'urgence
       toujours accepté
 - [x] Les erreurs déjà expliquées à l'écran ne déclenchent plus un second message technique
+- [x] **Application macOS** : `Fuji.app` dans un `.dmg`, pour processeurs Apple et Intel,
+      construite et essayée automatiquement sur des Mac de GitHub (`fuji selftest`) ;
+      journal des erreurs dans `~/.fuji/fuji.log` — voir [INSTALLATION_MAC.md](INSTALLATION_MAC.md)
+- [x] **Tests de l'interface sur macOS** : les 30 tests y passent, à chaque modification
+- [x] Live Micro-Manager : il se figeait au bout de quelques secondes avec une caméra plus
+      rapide que la boucle d'affichage (défaut révélé par les machines de GitHub)
 
 ## Prochaines étapes
 
 ### 1. Valider sur ton matériel (priorité)
 
-Tout ce qui précède est vérifié par environ 230 tests automatiques, mais **sur du
+Tout ce qui précède est vérifié par environ 240 tests automatiques, mais **sur du
 matériel simulé**. Voici ce qui n'a jamais pu être essayé et reste à valider :
 
 - [ ] **La vraie caméra** : `fuji touptek install` puis `fuji touptek info` sur le Mac
       avec la E3ISPM08300KPD
 - [ ] Vérifier l'alignement des valeurs 12 bits (0–4095 attendu) et l'ordre RGB
 - [ ] Vérifier qu'une capture pendant le live donne bien une image nette et récente
-- [ ] **macOS** : l'interface n'a été lancée que sous Linux
+- [x] **macOS** : les tests de l'interface et l'essai de l'application empaquetée
+      réussissent sur des Mac de GitHub (macOS 15 et 26, processeurs Apple et Intel)
+- [ ] **Ton Mac** : télécharger le `.dmg`, autoriser Fuji au premier lancement, vérifier
+      l'affichage (aucun œil humain n'a encore vu Fuji sur un écran de Mac)
 - [ ] Renseigner les vrais objectifs et l'adaptateur caméra dans le profil Diaplan
 - [ ] Calibrer chaque objectif au micromètre (assistant « Calibration »)
 - [ ] **ImageJ réel** : lancer le test de parité (`FUJI_TEST_IMAGEJ=1`, environ 90 cas). Les

@@ -42,7 +42,9 @@ jobs:
           briefcase build macOS app --no-input
           du -sh build/fuji/macos/app/Fuji.app
       - name: Version de macOS exigée
-        run: python packaging/macos/check_min_os.py build/fuji/macos/app/Fuji.app | tee version-macos.txt
+        run: |
+          set -o pipefail
+          python packaging/macos/check_min_os.py build/fuji/macos/app/Fuji.app --strict | tee version-macos.txt
       - name: Essai de l'application
         timeout-minutes: 10
         run: |

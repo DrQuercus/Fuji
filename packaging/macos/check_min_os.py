@@ -17,6 +17,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+#: Bibliothèques livrées par une dépendance mais jamais chargées par Fuji : leur exigence ne
+#: compte pas. (attach.dylib : outil de debugpy pour brancher un débogueur sur un programme.)
+IGNORED = {"attach.dylib"}
 MAGIC = {b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xca\xfe\xba\xbe", b"\xce\xfa\xed\xfe"}
 PATTERN = re.compile(
     r"cmd (LC_BUILD_VERSION|LC_VERSION_MIN_MACOSX)\n(?:.*\n)*?\s+(?:minos|version) (\d+(?:\.\d+)+)"
@@ -51,7 +54,7 @@ def main() -> int:
         declared = str(plistlib.load(f).get("LSMinimumSystemVersion", "0"))
     needs: dict[str, list[Path]] = {}
     for path in app.rglob("*"):
-        if path.is_file() and not path.is_symlink():
+        if path.is_file() and not path.is_symlink() and path.name not in IGNORED:
             found = min_os(path)
             if found:
                 needs.setdefault(found, []).append(path)

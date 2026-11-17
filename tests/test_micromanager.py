@@ -137,6 +137,35 @@ def test_snap_while_live_and_live_stops_cleanly(mm_core):
         assert int(scope.snap().data.max()) == 1234  # la caméra n'est pas restée « occupée »
 
 
+def test_live_keeps_up_with_a_camera_faster_than_the_loop(mm_core, monkeypatch):
+    """Une caméra qui produit plus vite que le live ne lit : le retard ne doit pas s'accumuler
+    (retirer les images une à une figeait le live au bout de quelques secondes)."""
+    import time
+
+    real_pop = mm_core.popNextImage
+
+    def slow_pop(*args, **kwargs):  # type: ignore[no-untyped-def]
+        time.sleep(0.0005)  # ordinateur lent : chaque image retirée coûte du temps
+        return real_pop(*args, **kwargs)
+
+    monkeypatch.setattr(mm_core, "popNextImage", slow_pop)
+    with Microscope(_mm_profile(mm_core)) as scope:
+        cam = scope.camera
+        cam.start_live()
+        try:
+            start, last, longest, frames = time.monotonic(), cam.latest_frame()[0], 0.0, 0
+            while time.monotonic() - start < 3.0:
+                before = time.monotonic()
+                cam.wait_for_frame(last, timeout=2)
+                longest = max(longest, time.monotonic() - before)
+                last, frames = cam.latest_frame()[0], frames + 1
+            assert frames > 30 and longest < 1.0, (frames, longest)
+            assert int(scope.snap().data.max()) == 1234  # la capture pendant le live reste possible
+        finally:
+            cam.stop_live()
+        assert not mm_core.isSequenceRunning()
+
+
 def test_live_thread_failure_does_not_leave_camera_busy(mm_core, monkeypatch):
     with Microscope(_mm_profile(mm_core)) as scope:
         cam = scope.camera

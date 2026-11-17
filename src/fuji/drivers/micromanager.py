@@ -28,6 +28,11 @@ from . import DriverContext, OptionSpec, register_driver
 
 log = logging.getLogger(__name__)
 
+#: au-delà de ce nombre d'images en attente, le live saute directement à la plus récente
+_LIVE_BACKLOG = 8
+#: temps passé, à chaque tour, à retirer les images en retard (s)
+_LIVE_CATCH_UP_S = 0.02
+
 # valeurs numériques des énumérations MMCore (stables depuis des années)
 _CAMERA, _SHUTTER, _STATE, _STAGE, _XYSTAGE = 2, 3, 4, 5, 6
 _MM_FLOAT, _MM_INT = 2, 3
@@ -225,11 +230,24 @@ class MMCamera(_MMMixin, Camera):
         while not self._live_stop.is_set():
             img = None
             try:
-                # ne garder que la plus récente des images en attente. Leur nombre est lu une
-                # seule fois : avec une caméra plus rapide que cette boucle, « tant qu'il en
-                # reste » ne finirait jamais et rien ne serait affiché.
-                for _ in range(int(core.getRemainingImageCount())):
-                    img = core.popNextImage(fix=True)
+                # ne garder que la plus récente des images en attente
+                waiting = int(core.getRemainingImageCount())
+                if waiting > _LIVE_BACKLOG:
+                    # caméra plus rapide que cette boucle : retirer toutes les images avant
+                    # d'afficher prendrait plus de temps qu'il n'en faut pour en recevoir
+                    # autant, le retard grandirait sans fin et le live se figerait. On prend
+                    # tout de suite la plus récente, puis on résorbe le retard sans y passer
+                    # plus de quelques millisecondes. (Vider le tampon d'un coup interrompt
+                    # l'acquisition de certaines caméras : on ne le fait pas.)
+                    img = core.getLastImage()
+                    deadline = time.monotonic() + _LIVE_CATCH_UP_S
+                    for _ in range(waiting):
+                        core.popNextImage(fix=False)
+                        if time.monotonic() > deadline:
+                            break
+                else:
+                    for _ in range(waiting):
+                        img = core.popNextImage(fix=True)
             except Exception:
                 errors += 1
                 if errors > 20:  # caméra perdue : ne pas tourner à vide indéfiniment
