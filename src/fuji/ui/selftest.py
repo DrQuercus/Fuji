@@ -99,18 +99,21 @@ def run(report: str | None = None, screenshot: str | None = None) -> int:
         win = state["win"]
         win.live.start()
         wait(lambda: LIVE_LAYER in win.viewer.layers)
-        start, seen = time.monotonic(), 0
-        last = None
-        while time.monotonic() - start < 2.0:  # le live tourne-t-il vraiment ?
+        # le live tourne-t-il vraiment ? on attend trois images différentes (un ordinateur
+        # lent en met plus de temps, ce n'est pas une panne)
+        start, seen, last = time.monotonic(), 0, None
+        while seen < 3:
+            if time.monotonic() - start > 45.0:
+                win.live.stop()
+                raise RuntimeError(f"le live n'a affiché que {seen} image(s) en 45 s")
             state["app"].processEvents()
             data = win.viewer.layers[LIVE_LAYER].data
             if data is not last:
                 last, seen = data, seen + 1
             time.sleep(0.005)
+        elapsed = time.monotonic() - start
         win.live.stop()
-        if seen < 2:
-            raise RuntimeError("le live n'a affiché qu'une image")
-        return f"{seen} images en 2 s, {tuple(last.shape)}"
+        return f"{seen} images en {elapsed:.1f} s, {tuple(last.shape)}"
 
     def capture() -> str:
         win = state["win"]

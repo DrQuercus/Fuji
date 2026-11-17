@@ -42,7 +42,7 @@ jobs:
           briefcase build macOS app --no-input
           du -sh build/fuji/macos/app/Fuji.app
       - name: Version de macOS exigée
-        run: python packaging/macos/check_min_os.py build/fuji/macos/app/Fuji.app
+        run: python packaging/macos/check_min_os.py build/fuji/macos/app/Fuji.app | tee version-macos.txt
       - name: Essai de l'application
         timeout-minutes: 10
         run: |
@@ -51,7 +51,9 @@ jobs:
           "$APP" selftest --report selftest.json --screenshot selftest.png
       - name: Résultat de l'essai
         if: always()
-        run: test -f selftest.json && cat selftest.json || echo "pas de rapport"
+        run: |
+          test -f selftest.json && cat selftest.json || echo "pas de rapport"
+          cat version-macos.txt || true
       - name: Fabrication du .dmg
         run: |
           briefcase package macOS app --adhoc-sign --no-input
