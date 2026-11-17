@@ -4,7 +4,7 @@ Logiciel de microscopie qui réunit le meilleur de **Micro-Manager** (piloter le
 matériel), **napari** (afficher les images) et **Fiji/ImageJ** (analyser), dans une
 interface propre qui s'adapte au microscope.
 
-> Projet en développement (version 0.1, premières briques). Voir
+> Projet en développement (version 0.5, validée sur du matériel simulé). Voir
 > [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) et [docs/FEUILLE_DE_ROUTE.md](docs/FEUILLE_DE_ROUTE.md).
 
 ![Interface de Fuji : assistant Köhler sur le microscope simulé](docs/interface.png)
@@ -81,7 +81,15 @@ simulé, vide, copie de l'actuel). L'éditeur couvre **tout** le profil :
   voir les images, régler le microscope, lancer acquisitions et analyses, avec des
   garde-fous. Voir [docs/IA.md](docs/IA.md).
 
-## Installation (macOS, Linux, Windows)
+## Installation
+
+### Sur Mac : l'application
+
+Un fichier `.dmg` à ouvrir, une icône à glisser dans Applications : rien d'autre à
+installer. Voir [docs/INSTALLATION_MAC.md](docs/INSTALLATION_MAC.md) (choix du fichier,
+premier lancement, caméra ToupTek).
+
+### Avec Python (macOS, Linux, Windows)
 
 Python 3.10 ou plus récent.
 
@@ -155,6 +163,10 @@ fuji check
 ```
 
 ```bash
+fuji selftest
+```
+
+```bash
 fuji -p demo snap -o capture.ome.tif
 ```
 
@@ -166,8 +178,10 @@ fuji moteurs ports
 fuji -p demo mcp
 ```
 
-(`fuji moteurs ports` liste les ports série où chercher une carte de moteurs ; `fuji mcp`
-démarre le serveur pour IA, lancé d'ordinaire par l'assistant lui-même.)
+(`fuji selftest` ouvre Fuji quelques secondes sur le microscope simulé et vérifie que tout
+fonctionne sur cet ordinateur ; `fuji moteurs ports` liste les ports série où chercher une
+carte de moteurs ; `fuji mcp` démarre le serveur pour IA, lancé d'ordinaire par l'assistant
+lui-même.)
 
 Sans interface (script Python) :
 

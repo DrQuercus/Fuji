@@ -10,8 +10,14 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 @pytest.fixture(autouse=True)
 def _isolated_home(tmp_path, monkeypatch):
-    """Chaque test a son propre dossier utilisateur (profils, champ plat...)."""
+    """Chaque test a son propre dossier utilisateur (profils, champ plat...) et ses propres
+    réglages d'interface : lancer les tests ne touche jamais à l'installation de l'utilisateur."""
     monkeypatch.setenv("FUJI_HOME", str(tmp_path / "fuji-home"))
+    try:
+        from fuji.ui.app import isolate_settings
+    except ImportError:  # interface non installée
+        return
+    isolate_settings(str(tmp_path / "reglages"))
 
 
 @pytest.fixture

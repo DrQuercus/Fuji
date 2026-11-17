@@ -50,6 +50,18 @@ def install_error_handler() -> None:
     sys.excepthook = hook
 
 
+def isolate_settings(folder: str) -> None:
+    """Range les réglages de l'interface dans ``folder`` plutôt que dans les préférences de
+    l'utilisateur (tests, essai automatique).
+
+    Sur macOS, les préférences « natives » ne se déplacent pas (``QSettings.setPath`` y est
+    sans effet) : on passe donc au format ``.ini``, déplaçable sur tous les systèmes. À
+    appeler avant de créer la fenêtre.
+    """
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(folder))
+
+
 def _connect(name: str) -> Microscope:
     scope = Microscope.from_file(name)
     scope.connect()

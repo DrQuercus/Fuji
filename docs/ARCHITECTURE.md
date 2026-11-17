@@ -70,6 +70,8 @@
 | `ui/config/` | Éditeur de profil : pages, formulaires générés depuis les options des pilotes, modèles |
 | `ui/panels/` | Panneaux : contrôle, assistants, acquisition, analyse, microscopes, réglages |
 | `core/catalog.py` | Objectifs et cubes courants, modèles de microscopes |
+| `ui/selftest.py` | Essai automatique de l'installation (`fuji selftest`) |
+| `packaging/` | Application empaquetée : icônes, script de construction du `.dmg`, contrôle de la version de macOS |
 
 ## Ajouter un pilote
 

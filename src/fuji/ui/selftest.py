@@ -83,11 +83,9 @@ def run(report: str | None = None, screenshot: str | None = None) -> int:
             time.sleep(0.01)
 
     def window() -> str:
-        from qtpy.QtCore import QSettings
+        from fuji.ui.app import create_window, isolate_settings
 
-        QSettings.setPath(QSettings.Format.NativeFormat, QSettings.Scope.UserScope, str(scratch / "reglages"))
-        from fuji.ui.app import create_window
-
+        isolate_settings(str(scratch / "reglages"))  # les préférences de l'utilisateur ne bougent pas
         app, win = create_window("demo")
         state["app"], state["win"] = app, win
         win.resize(1400, 900)

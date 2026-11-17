@@ -16,11 +16,9 @@ pytest.importorskip("napari")
 
 @pytest.fixture
 def window(qtbot, tmp_path):
-    from qtpy.QtCore import QSettings
+    from fuji.ui.app import create_window, isolate_settings
 
-    QSettings.setPath(QSettings.Format.NativeFormat, QSettings.Scope.UserScope, str(tmp_path))
-    from fuji.ui.app import create_window
-
+    isolate_settings(str(tmp_path))
     _, win = create_window("demo")
     win.m.camera._timing = False
     qtbot.addWidget(win)  # qtbot ferme et détruit la fenêtre en fin de test

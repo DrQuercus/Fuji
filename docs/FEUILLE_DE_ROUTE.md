@@ -122,7 +122,11 @@ matériel simulé**. Voici ce qui n'a jamais pu être essayé et reste à valide
 
 ### 3. Confort
 - [ ] Profils d'expérience (« time-lapse cellules vivantes », « lame fixée »...)
-- [ ] Installateur macOS (.app)
+- [x] Application macOS (`.app` dans un `.dmg`), construite et essayée automatiquement sur
+      des Mac de GitHub — voir [INSTALLATION_MAC.md](INSTALLATION_MAC.md)
+- [ ] Signature et notarisation Apple (demande un compte développeur) pour supprimer
+      l'étape d'autorisation au premier lancement
+- [ ] Installateur Windows (.msi) — la même configuration d'empaquetage le permet
 
 ### 4. Analyse avancée
 - [ ] Segmentation par apprentissage (Cellpose, StarDist)
