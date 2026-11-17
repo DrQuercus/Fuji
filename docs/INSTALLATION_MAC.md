@@ -60,6 +60,10 @@ Le pilote du fabricant n'est pas inclus dans Fuji (sa licence ne le permet pas).
 |---|---|
 | Profils de microscope, calibrations | `~/.fuji/` (dossier caché de ton dossier personnel) |
 | Fichiers produits par un assistant IA | `~/Fuji/ia/` |
+| Journal des erreurs (utile si quelque chose ne marche pas) | `~/.fuji/fuji.log` |
+
+Pour ouvrir le dossier caché `~/.fuji` : dans le Finder, menu Aller → « Aller au dossier… »
+et taper `~/.fuji`.
 
 Désinstaller : mettre Fuji à la corbeille. Les dossiers ci-dessus restent, pour garder tes
 calibrations ; supprime-les si tu veux tout effacer.

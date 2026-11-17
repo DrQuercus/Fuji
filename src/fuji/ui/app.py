@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import logging
 import sys
+from pathlib import Path
 
 from qtpy.QtCore import QSettings
 from qtpy.QtWidgets import QApplication, QMessageBox
 
 from fuji.core.microscope import Microscope
+from fuji.core.profile import user_profile_dir
 
 log = logging.getLogger(__name__)
 
@@ -99,7 +101,37 @@ def create_window(profile: str | None = None):  # type: ignore[no-untyped-def]
     return app, window
 
 
+def log_file() -> Path:
+    """Journal de Fuji : ``~/.fuji/fuji.log`` (ou dans ``FUJI_HOME``)."""
+    return user_profile_dir().parent / "fuji.log"
+
+
+def start_log_file() -> Path | None:
+    """Écrit les avertissements et les erreurs dans un fichier.
+
+    Une application lancée d'un double-clic n'a pas de terminal : sans ce journal, la cause
+    d'une panne (caméra absente, pilote refusé...) serait perdue. Deux fichiers de 500 Ko au
+    plus sont gardés."""
+    from logging.handlers import RotatingFileHandler
+
+    root = logging.getLogger()
+    if any(getattr(handler, "_fuji_journal", False) for handler in root.handlers):
+        return log_file()
+    try:
+        path = log_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(path, maxBytes=500_000, backupCount=1, encoding="utf-8")
+    except OSError:  # dossier protégé : Fuji fonctionne quand même, sans journal
+        return None
+    handler._fuji_journal = True  # type: ignore[attr-defined]
+    handler.setLevel(logging.WARNING)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s : %(message)s"))
+    root.addHandler(handler)
+    return path
+
+
 def run_app(profile: str | None = None) -> int:
+    start_log_file()
     install_error_handler()
     app, window = create_window(profile)
     window.show()

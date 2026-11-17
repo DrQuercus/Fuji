@@ -83,6 +83,33 @@ def test_finder_process_number_is_ignored(monkeypatch, capsys):
     assert stop.value.code == 0 and "gcode" in capsys.readouterr().out
 
 
+def test_errors_are_kept_in_a_log_file(tmp_path, monkeypatch):
+    """Lancée d'un double-clic, l'application n'a pas de terminal : les erreurs vont au journal."""
+    pytest.importorskip("qtpy")
+    import logging
+
+    from fuji.ui import app
+
+    monkeypatch.setenv("FUJI_HOME", str(tmp_path / "maison"))
+    root = logging.getLogger()
+    before = list(root.handlers)
+    try:
+        path = app.start_log_file()
+        assert path == tmp_path / "maison" / "fuji.log" and app.start_log_file() == path  # une seule fois
+        assert len(root.handlers) == len(before) + 1
+        logging.getLogger("fuji.essai").warning("caméra « %s » introuvable", "ToupTek")
+        logging.getLogger("fuji.essai").info("détail sans importance")
+        for handler in root.handlers:
+            handler.flush()
+        text = path.read_text(encoding="utf-8")
+        assert "caméra « ToupTek » introuvable" in text and "sans importance" not in text
+    finally:
+        for handler in root.handlers[:]:
+            if handler not in before:
+                root.removeHandler(handler)
+                handler.close()
+
+
 @pytest.mark.gui
 def test_selftest_passes_on_the_simulated_microscope(tmp_path):
     """Le même essai que celui lancé sur l'application empaquetée avant de la distribuer."""
