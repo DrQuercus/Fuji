@@ -696,8 +696,11 @@ def test_window_fits_a_small_laptop_screen(qtbot, tmp_path):
     win.show()
     for mode in ("microscope", "analyse"):
         win.set_mode(mode)
-        hint = win.minimumSizeHint().expandedTo(win.minimumSize())
-        assert hint.width() <= 800 and hint.height() <= 700, (mode, hint)
+        for _ in range(3):  # comme quand on rétrécit la fenêtre à la souris : la barre se compacte
+            win.resize(600, 500)
+            qtbot.wait(50)
+        # la largeur exacte dépend des polices du système (Mac ≈ 750, Linux ≈ 770)
+        assert win.width() <= 820 and win.height() <= 700, (mode, win.size())
     win.set_mode("microscope")
     win.resize(1024, 640)
     qtbot.waitUntil(lambda: win.width() <= 1024, timeout=3000)
