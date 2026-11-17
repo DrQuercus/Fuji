@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import itertools
+
 import numpy as np
 import pytest
 from scipy import ndimage as ndi
@@ -119,92 +121,236 @@ objectives:
     assert error(stack.result) < 0.85 * min(errors), (error(stack.result), errors)
 
 
+def test_focus_stacking_is_never_stuck_after_the_slide_moved(banded_frames):
+    """Le glissement est mesuré par rapport à l'image composée, sans cumul : dès que la lame
+    revient en place, la composition reprend (avant, elle restait bloquée)."""
+    sharp, frames = banded_frames
+    stack = FocusStacker()
+    for frame in frames[:3]:
+        stack.add(frame)
+    for _ in range(5):  # la lame est déplacée un moment
+        st = stack.add(np.roll(frames[3], (100, 150), axis=(0, 1)))
+        assert st.state == "bougé" and not st.accepted
+    for frame in frames[3:]:  # elle revient : les images suivantes comptent de nouveau
+        assert stack.add(frame).accepted
+    assert stack.status.state in ("mieux", "rien") and _details(stack.result, sharp) > 0.95
+
+
+def test_focus_stacking_leaves_an_empty_background_alone():
+    """Sur un fond sans détail, le bruit de la caméra ne fait pas « gagner » une image sur
+    l'autre : rien n'est remplacé, la composition ne scintille pas."""
+    rng = np.random.default_rng(5)
+    stack = FocusStacker()
+    first = np.clip(rng.normal(3000, 25, (360, 540, 3)), 0, 4095).astype(np.uint16)
+    stack.add(first)
+    gains = [
+        stack.add(np.clip(rng.normal(3000, 25, first.shape), 0, 4095).astype(np.uint16)).contribution
+        for _ in range(8)
+    ]
+    assert max(gains) == 0.0 and stack.status.state == "rien"
+    assert np.array_equal(stack.result, first)
+
+
+def test_focus_stacking_a_4k_frame_is_fast_enough_for_live():
+    """Une image 4K couleur est fusionnée en bien moins d'une demi-seconde."""
+    import time
+
+    rng = np.random.default_rng(6)
+    base = ndi.zoom(rng.random((270, 480, 3)).astype(np.float32), (8, 8, 1), order=1) * 3000
+    frames = [np.clip(base + rng.normal(0, 30, base.shape), 0, 4095).astype(np.uint16) for _ in range(2)]
+    stack = FocusStacker()
+    stack.add(frames[0])
+    t0 = time.perf_counter()
+    for i in range(4):
+        stack.add(frames[(i + 1) % 2])
+    assert (time.perf_counter() - t0) / 4 < 0.5
+    assert stack.result.shape == (2160, 3840, 3)
+
+
 # -------------------------------------------------------------------- panorama
-class _Slide:
-    """Une grande lame, vue par la caméra à l'endroit où on l'a poussée."""
+class _Rig:
+    """Une grande lame sous une caméra fixe, comme sur un vrai microscope : éclairage inégal
+    (vignettage), poussières fixes, bruit, et flou de bougé quand la lame se déplace."""
 
-    def __init__(self) -> None:
-        self.world = _texture(1100, 1500, seed=5)
-        self.rng = np.random.default_rng(3)
+    def __init__(self, field: tuple[int, int] = (300, 400), exposure_s: float = 0.004) -> None:
+        self.slide = _texture(1500, 2200, seed=7).astype(np.float32)
+        self.field, self.exposure_s = field, exposure_s
+        self.rng = np.random.default_rng(8)
+        h, w = field
+        yy, xx = np.mgrid[:h, :w].astype(np.float32)
+        shade = 1 - 0.09 * (((yy - h / 2) / (h / 2)) ** 2 + ((xx - w / 2) / (w / 2)) ** 2)
+        for _ in range(8):  # poussières sur le capteur
+            y, x, r = self.rng.uniform(0, h), self.rng.uniform(0, w), self.rng.uniform(2, 5)
+            shade *= 1 - 0.2 * np.exp(-((yy - y) ** 2 + (xx - x) ** 2) / (2 * r * r))
+        self.shade = shade[..., None]
 
-    def view(self, r: float, c: float, h: int = 300, w: int = 400) -> np.ndarray:
-        return _noisy(self.world[int(r) : int(r) + h, int(c) : int(c) + w].astype(np.float32), self.rng)
+    def frame(self, pos: tuple[float, float], velocity: tuple[float, float] = (0.0, 0.0)) -> np.ndarray:
+        h, w = self.field
+        blur = (velocity[0] * self.exposure_s, velocity[1] * self.exposure_s)
+        n = max(1, int(np.ceil(max(abs(blur[0]), abs(blur[1])))) + 1)
+        acc = np.zeros((h, w, 3), np.float32)
+        for k in range(n):  # la lame avance pendant la pose
+            f = (k + 0.5) / n - 0.5
+            y, x = int(round(pos[0] + f * blur[0])), int(round(pos[1] + f * blur[1]))
+            acc += self.slide[y : y + h, x : x + w]
+        img = acc / n * self.shade + self.rng.normal(0, 15, acc.shape)
+        return np.clip(img, 0, 4095).astype(np.uint16)
 
 
-def _push(mosaic: LiveMosaic, slide: _Slide, stops: list[tuple[int, int]], pause: int = 3) -> list[str]:
-    """Pousse la lame d'arrêt en arrêt (quelques images pendant le mouvement, puis immobile)."""
-    states, cur = [], stops[0]
-    for stop in stops:
-        for a in (0.25, 0.5, 0.75, 1.0):
-            states.append(
-                mosaic.add(slide.view(cur[0] + a * (stop[0] - cur[0]), cur[1] + a * (stop[1] - cur[1]))).state
-            )
-        for _ in range(pause):
-            states.append(mosaic.add(slide.view(*stop)).state)
-        cur = stop
-    return states
+def _glide(
+    mosaic: LiveMosaic,
+    rig: _Rig,
+    stops: list[tuple[float, float]],
+    speed: float = 400.0,
+    fps: float = 30.0,
+    t0: float = 0.0,
+) -> tuple[list[str], float, list[float]]:
+    """La main pousse la lame d'un point au suivant **sans s'arrêter**, en tremblant un peu.
+    Renvoie les états, l'instant final et l'erreur de position à chaque image suivie."""
+    states, errors, t = [], [], t0
+    for a, b in itertools.pairwise(stops):
+        dist = float(np.hypot(b[0] - a[0], b[1] - a[1]))
+        steps = max(1, int(dist / speed * fps))
+        for i in range(1, steps + 1):
+            f = i / steps
+            tremor = 1.2 * np.sin(31 * t)
+            pos = (a[0] + f * (b[0] - a[0]) + tremor, a[1] + f * (b[1] - a[1]) - tremor)
+            vel = ((b[0] - a[0]) / dist * speed, (b[1] - a[1]) / dist * speed)
+            before = len(mosaic.tiles)
+            st = mosaic.add(rig.frame(pos, vel), t, rig.exposure_s)
+            states.append(st.state)
+            if before == 0 and mosaic.tiles:  # où était vraiment la lame au premier champ posé
+                first = mosaic.tiles[0].position
+                mosaic.truth0 = (pos[0] - first[0], pos[1] - first[1])
+            if st.position is not None and st.state != "perdu" and mosaic.tiles:
+                dy = st.position[0] + mosaic.truth0[0] - pos[0]
+                dx = st.position[1] + mosaic.truth0[1] - pos[1]
+                errors.append(float(np.hypot(dy, dx)))
+            t += 1.0 / fps
+    return states, t, errors
 
 
-def test_panorama_places_each_field_where_it_is(tmp_path):
-    slide = _Slide()
-    stops = [(50, 50), (50, 300), (50, 550), (260, 550), (260, 300), (260, 50)]
-    mosaic = LiveMosaic(workdir=tmp_path)
-    states = _push(mosaic, slide, stops)
-    assert states.count("ajouté") == len(stops) == len(mosaic.tiles)
-    first = np.array(mosaic.tiles[0].position)
-    for tile, truth in zip(mosaic.tiles, stops, strict=True):
-        assert np.array(tile.position) - first + stops[0] == pytest.approx(truth, abs=1.0)
+_SERPENTINE = [
+    (100.0, 100.0),
+    (100.0, 1300.0),
+    (350.0, 1300.0),
+    (350.0, 100.0),
+    (600.0, 100.0),
+    (600.0, 1300.0),
+]
+
+
+def test_panorama_builds_without_ever_stopping(tmp_path):
+    """La lame est poussée en continu, en serpentin : tout le parcours est assemblé, chaque
+    champ à sa place (avant, il fallait s'arrêter net sur chaque champ)."""
+    rig, mosaic = _Rig(), LiveMosaic(workdir=tmp_path)
+    states, _t, errors = _glide(mosaic, rig, _SERPENTINE)
+    assert "perdu" not in states and "trop_vite" not in states
+    assert len(mosaic.tiles) > 15 and states.count("ajouté") == len(mosaic.tiles)
+    assert np.median(errors) < 2.0 and max(errors) < 6.0  # pixels
     image, scale = mosaic.render()
-    assert scale == 1 and image.shape[:2] == (510, 900)
-    ref = slide.world[50 : 50 + 510, 50 : 50 + 900]
-    assert _details(image, ref) > 0.97
-    preview, factor, _origin = mosaic.preview  # l'aperçu couvre tout le panorama
-    assert preview.shape[0] * factor >= image.shape[0] and preview.shape[1] * factor >= image.shape[1]
+    assert scale == 1 and image.dtype == np.uint16
+    top, left = mosaic.bounds()[:2]
+    # toute la zone parcourue est couverte, et ressemble à la lame
+    assert image.shape[0] >= 780 and image.shape[1] >= 1580 and (image.sum(-1) > 0).mean() > 0.97
+    r, c = int(round(top + mosaic.truth0[0])), int(round(left + mosaic.truth0[1]))
+    truth = rig.slide[r : r + image.shape[0], c : c + image.shape[1]]
+    inner = (slice(60, 700), slice(60, 1500))
+    assert _details(image[inner], truth[inner]) > 0.9
     mosaic.close()
-    assert not list(tmp_path.glob("fuji-panorama-*/*.npy"))  # fichiers temporaires effacés
+    assert not list(tmp_path.glob("fuji-panorama-*"))
 
 
-def test_panorama_only_adds_still_fields_with_new_area(tmp_path):
-    slide = _Slide()
-    mosaic = LiveMosaic(workdir=tmp_path)
-    for k in range(12):  # la lame ne s'arrête jamais : rien de flou n'est ajouté
-        mosaic.add(slide.view(50 + 15 * k, 50 + 20 * k))
-    assert not mosaic.tiles and mosaic.status.state == "attente"
-    for _ in range(3):
-        mosaic.add(slide.view(250, 300))
-    assert len(mosaic.tiles) == 1
-    for _ in range(3):  # quelques pixels plus loin : rien de nouveau à ajouter
-        mosaic.add(slide.view(255, 305))
-    assert len(mosaic.tiles) == 1 and mosaic.status.state == "couvert"
+def test_panorama_evens_out_the_lighting(tmp_path):
+    """Le vignettage est estimé sur l'ensemble des champs et compensé : pas de bandes sombres
+    entre les rangées, même sans image de référence."""
+    rig, mosaic = _Rig(), LiveMosaic(workdir=tmp_path)
+    _glide(mosaic, rig, _SERPENTINE)
+    shading = mosaic.shading()
+    assert shading is not None and shading.min() < 0.97 < 1.01 < shading.max()  # coins sombres
+    top, left = mosaic.bounds()[:2]
+    r, c = int(round(top + mosaic.truth0[0])), int(round(left + mosaic.truth0[1]))
+
+    def unevenness(image: np.ndarray) -> float:
+        """Écart de luminosité à grande échelle entre le panorama et la lame."""
+        truth = rig.slide[r : r + image.shape[0], c : c + image.shape[1], 1]
+        ratio = ndi.gaussian_filter(image[..., 1].astype(np.float32), 20) / ndi.gaussian_filter(truth, 20)
+        ratio = ratio[80:700, 80:1500]
+        return float(np.ptp(ratio) / ratio.mean())
+
+    assert unevenness(mosaic.render()[0]) < 0.6 * unevenness(mosaic.render(even=False)[0])
     mosaic.close()
+
+
+def test_panorama_too_fast_is_softer_then_refined_and_reports_speed(tmp_path):
+    rig, mosaic = _Rig(), LiveMosaic(workdir=tmp_path)
+    row = [(100.0, 100.0), (100.0, 1300.0)]
+    states, t, _ = _glide(mosaic, rig, row, speed=800.0)  # 3,2 px de flou : posé, mais « vite »
+    assert "vite" in states and "trop_vite" not in states and "perdu" not in states
+    soft = max(t.blur for t in mosaic.tiles)
+    assert soft > 2.5
+    # on repasse lentement : les champs flous sont remplacés par des nets
+    states, t, _ = _glide(mosaic, rig, row[::-1], speed=250.0, t0=t + 0.1)
+    assert "affiné" in states
+    assert max(t.blur for t in mosaic.tiles) < soft
+    # beaucoup trop vite : rien n'est posé, on demande de ralentir
+    fast = LiveMosaic(workdir=tmp_path)
+    _states, t, _ = _glide(fast, rig, [(100.0, 100.0), (100.0, 130.0)], speed=100.0)  # un premier champ
+    n = len(fast.tiles)
+    states, _t, _ = _glide(fast, rig, [(100.0, 130.0), (100.0, 1300.0)], speed=2500.0, t0=t)
+    assert n >= 1 and len(fast.tiles) == n and "trop_vite" in states
+    assert "ralentissez" in fast.status.message.lower() or fast.status.state == "perdu"
+    for m in (mosaic, fast):
+        m.close()
 
 
 def test_panorama_recovers_after_losing_track_and_can_undo(tmp_path):
-    slide = _Slide()
-    mosaic = LiveMosaic(workdir=tmp_path)
-    _push(mosaic, slide, [(50, 50), (50, 300)])
-    assert len(mosaic.tiles) == 2
-    lost = mosaic.add(slide.view(700, 1000))  # bien trop vite : plus rien en commun
-    assert lost.state == "perdu" and "revenez" in lost.message
-    back = mosaic.add(slide.view(60, 310))  # retour sur une zone connue
-    assert back.state in ("suivi", "couvert")
-    first = np.array(mosaic.tiles[0].position)
-    assert np.array(back.position) - first + (50, 50) == pytest.approx((60, 310), abs=1.0)
-    assert mosaic.undo() and len(mosaic.tiles) == 1
-    for _ in range(4):  # immobile au même endroit : le champ retiré ne revient pas tout seul
-        mosaic.add(slide.view(60, 310))
-    assert len(mosaic.tiles) == 1 and "déplacez" in mosaic.status.message
-    image, _ = mosaic.render()
-    assert image.shape[:2] == (300, 400)
+    rig, mosaic = _Rig(), LiveMosaic(workdir=tmp_path)
+    states, t, _ = _glide(mosaic, rig, [(100.0, 100.0), (100.0, 700.0)])
+    n = len(mosaic.tiles)
+    assert n >= 4 and "perdu" not in states
+    # un geste brusque : la lame saute loin, le suivi est perdu, rien n'est ajouté
+    for k in range(4):
+        st = mosaic.add(rig.frame((900.0, 1500.0 + 3 * k)), t + 0.1 * (k + 1), rig.exposure_s)
+    assert st.state == "perdu" and len(mosaic.tiles) == n and "revenez" in st.message
+    # retour sur une zone assemblée : la position est retrouvée, et le panorama continue
+    states, t, errors = _glide(mosaic, rig, [(100.0, 400.0), (100.0, 1000.0)], t0=t + 1.0)
+    assert states[0] in ("suivi", "couvert", "ajouté") and "perdu" not in states[1:]
+    assert len(mosaic.tiles) > n and max(errors[5:]) < 6.0
+
+    # retirer le dernier champ : il ne revient pas tant que la lame n'a pas bougé
+    count, version = len(mosaic.tiles), mosaic.status.version
+    assert mosaic.undo() and len(mosaic.tiles) == count - 1 and mosaic.status.version > version
+    for k in range(5):
+        st = mosaic.add(rig.frame((100.0, 1000.0)), t + 0.05 * (k + 1), rig.exposure_s)
+    assert len(mosaic.tiles) == count - 1 and "retiré" in st.message
+    mosaic.close()
+
+
+def test_panorama_is_not_held_back_by_dust_on_the_sensor(tmp_path):
+    """Des poussières fixes très marquées ne « retiennent » pas l'image : elles sont apprises
+    pendant le déplacement et retirées du suivi."""
+    rig, mosaic = _Rig(), LiveMosaic(workdir=tmp_path)
+    h, w = rig.field
+    yy, xx = np.mgrid[:h, :w].astype(np.float32)
+    rng = np.random.default_rng(3)
+    for _ in range(60):
+        y, x = rng.uniform(0, h), rng.uniform(0, w)
+        rig.shade *= (1 - 0.45 * np.exp(-((yy - y) ** 2 + (xx - x) ** 2) / 18.0))[..., None]
+    states, _t, errors = _glide(mosaic, rig, _SERPENTINE[:4])
+    assert "perdu" not in states and np.median(errors) < 2.5 and max(errors) < 8.0
     mosaic.close()
 
 
 def test_large_panorama_is_reduced_to_fit_in_memory(tmp_path):
-    slide = _Slide()
-    mosaic = LiveMosaic(workdir=tmp_path)
-    _push(mosaic, slide, [(50, 50), (50, 300), (260, 300)])
-    full = mosaic.footprint()
-    image, scale = mosaic.render(max_pixels=full[0] * full[1] // 3)
-    assert scale == 2 and image.shape[:2] == pytest.approx((full[0] // 2, full[1] // 2), abs=2)
-    assert image.dtype == np.uint16
+    rig, mosaic = _Rig(), LiveMosaic(workdir=tmp_path)
+    _glide(mosaic, rig, [(100.0, 100.0), (100.0, 900.0)])
+    full, one = mosaic.render()
+    done = []
+    small, scale = mosaic.render(
+        max_pixels=full.shape[0] * full.shape[1] // 3, progress=lambda a, b: done.append((a, b))
+    )
+    assert one == 1 and scale == 2 and done and done[-1][0] == done[-1][1]
+    assert abs(small.shape[0] - full.shape[0] // 2) <= 1 and abs(small.shape[1] - full.shape[1] // 2) <= 1
+    assert abs(float(small.mean()) - float(full.mean())) < 0.02 * float(full.mean())
     mosaic.close()

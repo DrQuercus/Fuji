@@ -1,4 +1,4 @@
-"""Panneau « Assistants » : Köhler, mise au point, calibration, éclairage / champ plat.
+"""Panneau « Assistants » : Köhler, mise au point, calibration, éclairage / image de référence.
 
 Les assistants lisent les images du live et dessinent leurs repères par-dessus
 l'image dans napari (contour du diaphragme, flèche de centrage, zones nettes...).
@@ -24,11 +24,9 @@ from qtpy.QtWidgets import (
 from superqt.utils import create_worker
 
 from fuji.assistants import (
-    FlatFieldStore,
     FocusTracker,
     KohlerAssistant,
     KohlerStep,
-    average_frames,
     calibrate_micrometer,
     focus_peaking,
     illumination_uniformity,
@@ -36,6 +34,7 @@ from fuji.assistants import (
 from fuji.assistants.focus import METRICS, autofocus
 from fuji.core.microscope import Microscope
 
+from ..flatfield_widget import FlatFieldWidget
 from ..live import LiveController
 from ..widgets import hint_label, row, section
 
@@ -464,18 +463,17 @@ class CalibrationWidget(QWidget):
         self.profile_saved.emit()
 
 
-# --------------------------------------------------------- éclairage, champ plat
+# ------------------------------------------------- éclairage, image de référence
 class IlluminationWidget(QWidget):
+    """Uniformité de l'éclairage, et image de référence qui la corrige."""
+
     message = Signal(str)
-    #: objectif ou canal changé (émis depuis n'importe quel thread, traité dans celui de l'interface)
-    _keys_changed = Signal()
 
     def __init__(
         self, microscope: Microscope, viewer: ViewerModel, live: LiveController, parent: QWidget | None = None
     ) -> None:
         super().__init__(parent)
         self.m, self.viewer, self.live = microscope, viewer, live
-        self.store = FlatFieldStore(microscope.profile.name)
         lay = QVBoxLayout(self)
         box, blay = section(
             "Uniformité",
@@ -489,46 +487,19 @@ class IlluminationWidget(QWidget):
         blay.addWidget(self.uni_text)
         lay.addWidget(box)
         box, blay = section(
-            "Champ plat",
-            hint="Corrige le vignettage et l'éclairage inégal : indispensable pour mesurer des intensités.",
+            "Image de référence",
+            hint="Corrige l'éclairage inégal, le vignettage et les poussières dans toutes les images "
+            "(live, captures, panoramas). Une référence par objectif et par canal : sur une zone "
+            "vide de la lame, « Prendre la référence ». Les mêmes commandes sont dans Contrôle → Caméra.",
         )
-        self.flat_btn = QPushButton("Acquérir le champ plat (lame vide)")
-        self.flat_btn.clicked.connect(lambda: self._acquire("flat"))
-        self.dark_btn = QPushButton("Acquérir le noir (lumière coupée)")
-        self.dark_btn.clicked.connect(lambda: self._acquire("dark"))
-        self.apply = QCheckBox("Corriger les captures")
-        self.apply.toggled.connect(self._refresh_status)
-        self.status = QLabel()
-        self.status.setWordWrap(True)
-        for w in (self.flat_btn, self.dark_btn, self.apply, self.status):
-            blay.addWidget(w)
+        self.reference = FlatFieldWidget(microscope)
+        self.reference.message.connect(self.message.emit)
+        blay.addWidget(self.reference)
         lay.addWidget(box)
         lay.addStretch(1)
-        self._dark: np.ndarray | None = None
-        self._pending: tuple[str, tuple[str | None, str | None]] | None = None
-        self._keys_changed.connect(self._refresh_status)
-        microscope.objective_changed.connect(self._on_keys_changed)
-        microscope.channel_changed.connect(self._on_keys_changed)
-        self._refresh_status()
 
-    def _keys(self) -> tuple[str | None, str | None]:
-        obj = self.m.objective
-        return (obj.label if obj else None), self.m.channel
-
-    def _on_keys_changed(self, *_: object) -> None:
-        try:
-            self._keys_changed.emit()
-        except RuntimeError:  # panneau déjà détruit (changement de microscope)
-            pass
-
-    def _refresh_status(self, *_: object) -> None:
-        ref = self.store.load(*self._keys())
-        obj, ch = self._keys()
-        self.status.setText(
-            f"Référence enregistrée pour {obj or '—'} / {ch or '—'}"
-            if ref
-            else f"Aucune référence pour {obj or '—'} / {ch or '—'}"
-        )
+    def shutdown(self) -> None:
+        self.reference.shutdown()
 
     def _uniformity(self) -> None:
         try:
@@ -537,8 +508,9 @@ class IlluminationWidget(QWidget):
             QMessageBox.warning(self, "Éclairage", str(exc))
             return
         rep = illumination_uniformity(frame)
+        corrected = " (fond corrigé par l'image de référence)" if self.m.flatfield.active else ""
         self.uni_text.setText(
-            f"Min/max : {rep.min_max_ratio:.2f} · coins/centre : {rep.corner_center_ratio:.2f}"
+            f"Min/max : {rep.min_max_ratio:.2f} · coins/centre : {rep.corner_center_ratio:.2f}{corrected}"
             f"<br>{rep.message}"
         )
         h, w = frame.shape[:2]
@@ -556,69 +528,6 @@ class IlluminationWidget(QWidget):
             translate=(h / gh * s / 2 - s / 2, w / gw * s / 2 - s / 2),
             units=("µm", "µm") if self.m.pixel_size_um() else None,
         )
-
-    def _acquire(self, kind: str) -> None:
-        """Moyenne de 8 images, dans un thread de travail (plusieurs secondes en pose longue)."""
-        if self._pending is not None:
-            return
-        self._pending = (kind, self._keys())
-        for b in (self.flat_btn, self.dark_btn):
-            b.setEnabled(False)
-        self.message.emit("Acquisition de la référence (8 images)…")
-        worker = create_worker(average_frames, self.m, 8, _start_thread=False, _ignore_errors=True)
-        worker.returned.connect(self._acquired)
-        worker.errored.connect(self._acquire_failed)
-        worker.finished.connect(self._acquire_finished)
-        worker.start()
-
-    def _acquire_failed(self, exc: Exception) -> None:
-        QMessageBox.warning(self, "Champ plat", str(exc))
-
-    def _acquire_finished(self) -> None:
-        self._pending = None
-        for b in (self.flat_btn, self.dark_btn):
-            b.setEnabled(True)
-
-    def _acquired(self, image: np.ndarray) -> None:
-        if self._pending is None:
-            return
-        kind, keys = self._pending
-        if kind == "dark":
-            self._dark = image
-            ref = self.store.load(*keys)
-            if ref is not None and ref[0].shape == image.shape:
-                self.store.save(*keys, ref[0], image)
-                self.message.emit("Image de noir enregistrée avec le champ plat existant")
-            else:
-                self.message.emit("Image de noir acquise (elle sera enregistrée avec le champ plat)")
-            return
-        cam = self.m.camera
-        if cam is not None:
-            saturated = float(np.mean(image >= 0.98 * (2**cam.bit_depth - 1)))
-            if saturated > 0.01:
-                QMessageBox.warning(
-                    self,
-                    "Champ plat",
-                    f"{saturated * 100:.0f} % de l'image est saturée : la référence serait fausse.\n\n"
-                    "Réduisez l'exposition ou la lampe, puis recommencez.",
-                )
-                return
-        dark = self._dark if self._dark is not None and self._dark.shape == image.shape else None
-        path = self.store.save(*keys, image, dark)
-        self.message.emit(f"Champ plat enregistré : {path}")
-        self._refresh_status()
-
-    def correct(self, data: np.ndarray) -> tuple[np.ndarray, bool | None]:
-        """Applique la correction de champ plat si elle est demandée.
-
-        Renvoie l'image et : ``None`` si la correction n'est pas demandée, ``True`` si
-        elle est appliquée, ``False`` si elle est demandée mais impossible (pas de
-        référence pour cet objectif et ce canal, ou taille d'image différente).
-        """
-        if not self.apply.isChecked():
-            return data, None
-        out = self.store.correct(data, *self._keys())
-        return (data, False) if out is None else (out, True)
 
 
 # ------------------------------------------------------------- platine motorisée
@@ -765,3 +674,4 @@ class AssistantsPanel(QTabWidget):
         """Arrête les minuteurs avant la déconnexion du microscope."""
         for assistant in (self.kohler, self.focus):
             assistant.stop()
+        self.illumination.shutdown()

@@ -50,6 +50,9 @@ class LiveController(QObject):
         self._last_count = -1
         self._times: deque[float] = deque(maxlen=30)
         self._frames_since_contrast = 0
+        #: place du live dans la vue : (agrandissement, décalage en unités de la vue). Les
+        #: compositions en direct le déplacent (panorama) ou le réduisent en vignette (EDF).
+        self._zoom, self._offset = 1.0, (0.0, 0.0)
 
     @property
     def running(self) -> bool:
@@ -72,6 +75,20 @@ class LiveController(QObject):
 
     def toggle(self) -> None:
         self.stop() if self.running else self.start()
+
+    def set_placement(self, zoom: float = 1.0, offset: tuple[float, float] = (0.0, 0.0)) -> None:
+        """Place l'image du live dans la vue : à sa taille normale à l'origine (par défaut),
+        décalée (panorama : le live suit la lame) ou réduite (vignette)."""
+        self._zoom, self._offset = float(zoom), (float(offset[0]), float(offset[1]))
+        if LIVE_LAYER in self.viewer.layers:
+            self._place(self.viewer.layers[LIVE_LAYER], self.microscope.pixel_size_um() or 1.0)
+
+    def _place(self, layer: object, px: float) -> None:
+        scale = (px * self._zoom, px * self._zoom)
+        if tuple(layer.scale[-2:]) != scale:  # type: ignore[attr-defined]
+            layer.scale = scale  # type: ignore[attr-defined]
+        if tuple(layer.translate[-2:]) != self._offset:  # type: ignore[attr-defined]
+            layer.translate = self._offset  # type: ignore[attr-defined]
 
     def _poll(self) -> None:
         cam = self.microscope.camera
@@ -98,9 +115,11 @@ class LiveController(QObject):
             layer = self.viewer.layers[name]
             if layer.data.shape == frame.shape and getattr(layer, "rgb", False) == rgb:
                 layer.data = frame
-                if tuple(layer.scale[-2:]) != (px, px):  # changement d'objectif
-                    layer.scale = (px, px)
+                if layer.metadata.get("pixel_size_um") != calibrated:  # changement d'objectif
                     layer.metadata["pixel_size_um"] = calibrated
+                    layer.scale = (px, px)
+                if name == LIVE_LAYER:
+                    self._place(layer, px)
                 self._frames_since_contrast += 1
                 if self.auto_contrast and self._frames_since_contrast >= 10:
                     layer.contrast_limits = contrast_for(frame, bits)
@@ -115,6 +134,9 @@ class LiveController(QObject):
             units=units_for(calibrated),
             contrast_limits=contrast_for(frame, bits),
         )
-        layer.metadata["pixel_size_um"] = self.microscope.pixel_size_um()
+        layer.metadata["pixel_size_um"] = calibrated
+        if name == LIVE_LAYER:
+            self._place(layer, px)
         self.viewer.layers.move(self.viewer.layers.index(layer), 0)
-        self.viewer.reset_view()
+        if name != LIVE_LAYER or (self._zoom == 1.0 and self._offset == (0.0, 0.0)):
+            self.viewer.reset_view()

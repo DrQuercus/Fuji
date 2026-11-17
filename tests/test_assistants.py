@@ -7,7 +7,6 @@ import pytest
 from scipy import ndimage as ndi
 
 from fuji.assistants import (
-    FlatFieldStore,
     FocusTracker,
     KohlerAssistant,
     KohlerStep,
@@ -118,17 +117,6 @@ def test_focus_tracker_and_autofocus(demo_scope):
     demo_scope.focus.move_to(7)
     z = autofocus(demo_scope, range_um=24, step_um=3)
     assert abs(z) < 1.5
-
-
-def test_flat_field_store_roundtrip(tmp_path):
-    store = FlatFieldStore("Mon microscope", root=tmp_path)
-    flat = np.full((8, 8), 1000.0, np.float32)
-    flat[:, :4] = 500
-    store.save("10x/0.25", "Fond clair", flat)
-    raw = (flat * 0.4).astype(np.uint16)
-    corrected = store.correct(raw, "10x/0.25", "Fond clair")
-    assert corrected is not None and corrected.std() < 1
-    assert store.correct(raw, "40x", "Fond clair") is None
 
 
 # ------------------------------------------------------------------ non-régressions

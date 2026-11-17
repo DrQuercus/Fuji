@@ -373,6 +373,8 @@ class MainWindow(QMainWindow):
         self._live_before_acq = False
         self.m = scope
         scope.manual_handler = self.manual_handler
+        # image de référence : la correction du fond reprend comme on l'avait laissée
+        scope.flatfield.set_enabled(self.settings.value("flatfield/enabled", False, type=bool))
         self.live = LiveController(scope, self.scope_viewer, self)
         self.live.fps_changed.connect(lambda f: self.fps_label.setText(f"{f:4.1f} im/s"))
         self.live.live_changed.connect(self._on_live_changed)
@@ -399,7 +401,7 @@ class MainWindow(QMainWindow):
         self.acquisition.bridge.progress.connect(lambda d, t: self.topbar.set_acquisition(d, t, True))
         self.acquisition.bridge.finished.connect(lambda *_: self.topbar.set_acquisition(0, 0, False))
         # en haut : compositions en direct (à la main) ; en dessous : acquisitions programmées
-        self.compose = ComposePanel(scope, self.scope_viewer, self.live, corrector=self._live_corrector)
+        self.compose = ComposePanel(scope, self.scope_viewer, self.live)
         self.compose.message.connect(self.notify)
         self.compose.done.connect(self._on_composed)
         acq_page = QWidget()
@@ -1010,34 +1012,19 @@ class MainWindow(QMainWindow):
         """La capture rejoint la liste des images prises (enregistrée tout de suite) ; elle
         s'ouvre dans l'espace Analyse quand on en a besoin."""
         self._captures += 1
-        data, corrected = self.assistants.illumination.correct(frame.data)
-        metadata = frame.metadata.to_dict()
+        data, metadata = frame.data, frame.metadata.to_dict()
+        # le fond est corrigé à la sortie de la caméra (image de référence) : rien à faire ici
         note = ""
-        if corrected:
-            metadata["flat_field_corrected"] = True
-            note = " · champ plat corrigé"
-        elif corrected is False:
-            note = " · ⚠ champ plat NON appliqué (pas de référence pour cet objectif et ce canal)"
+        if frame.metadata.extra.get("flat_field_corrected"):
+            note = " · fond corrigé"
+        elif self.m is not None and self.m.flatfield.enabled:
+            note = " · ⚠ fond NON corrigé (pas de référence pour cet objectif et ce canal)"
         info = self.gallery.add_image(
             data, kind="capture", metadata=metadata, pixel_size_um=frame.metadata.pixel_size_um
         )
         if self.quickbar is not None:
             self.quickbar.show_frame(data)
         self.notify(f"{info.name} enregistrée — liste « Images »{note}")
-
-    def _live_corrector(self) -> Any:
-        """Correction de champ plat à appliquer aux images du live pendant une composition
-        (si elle est demandée dans l'assistant « Éclairage ») : un panorama sans raccords."""
-        illum = self.assistants.illumination
-        if not illum.apply.isChecked():
-            return None
-        store, keys = illum.store, illum._keys()
-
-        def correct(data: np.ndarray) -> np.ndarray:
-            out = store.correct(data, *keys)
-            return data if out is None else out
-
-        return correct
 
     def _on_composed(self, image: np.ndarray, kind: str, metadata: Any, px: Any, summary: str) -> None:
         info = self.gallery.add_image(

@@ -27,6 +27,7 @@ from qtpy.QtWidgets import (
 from fuji.core.devices import LightSource
 from fuji.core.microscope import Microscope
 
+from ..flatfield_widget import FlatFieldWidget
 from ..widgets import hint_label, row, section
 
 
@@ -75,6 +76,8 @@ class MicroscopePanel(QWidget):
     def shutdown(self) -> None:
         """Arrête le rafraîchissement avant la déconnexion du microscope."""
         self._timer.stop()
+        if hasattr(self, "flatfield"):
+            self.flatfield.shutdown()
 
     # ------------------------------------------------------------- caméra
     def _camera_section(self, caps: dict[str, bool]) -> QWidget:
@@ -121,6 +124,10 @@ class MicroscopePanel(QWidget):
             wb.setToolTip("Sur une zone vide de la lame : le fond devient neutre")
             wb.clicked.connect(self._white_balance)
             lay.addWidget(wb)
+        # image de référence : le fond corrigé dès le live (comme le logiciel de la caméra)
+        self.flatfield = FlatFieldWidget(self.m)
+        self.flatfield.message.connect(self.message.emit)
+        lay.addWidget(self.flatfield)
         self._sync_slider()
         return box
 

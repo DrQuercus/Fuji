@@ -346,39 +346,75 @@ def test_analysis_uses_the_displayed_plane_of_a_stack(window):
     assert layer_to_image(layer).data.shape == stack.shape  # sans viewer : la pile entière
 
 
-def test_flat_field_requested_but_missing_is_reported(window):
-    illum = window.assistants.illumination
-    frame = window.m.snap()
-    data, applied = illum.correct(frame.data)
-    assert applied is None and data is frame.data
-    illum.apply.setChecked(True)
-    assert illum.correct(frame.data)[1] is False  # demandée, mais aucune référence
-    window._on_snap(frame)
-    assert "NON appliqué" in window.statusBar().currentMessage()
-    illum._pending = ("flat", illum._keys())
-    illum._acquired(np_full_like(frame.data))
-    data, applied = illum.correct(frame.data)
-    assert applied is True and data.shape == frame.data.shape
-
-
-def np_full_like(reference):  # type: ignore[no-untyped-def]
-    import numpy as np
-
-    return np.full(reference.shape, 1000.0, np.float32)
-
-
-def test_saturated_flat_field_is_rejected(window, monkeypatch):
+def test_reference_image_corrects_live_and_captures(window, qtbot, monkeypatch):
+    """Image de référence : prise dans Contrôle, le fond est corrigé dès le live."""
     import numpy as np
     from qtpy.QtWidgets import QMessageBox
 
-    illum = window.assistants.illumination
-    shown = []
-    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: shown.append(a[2]))
-    frame = window.m.snap().data
-    illum._pending = ("flat", illum._keys())
-    illum._acquired(np.full(frame.shape, 2**window.m.camera.bit_depth - 1, np.float32))
-    assert shown and "saturée" in shown[0]
-    assert illum.store.load(*illum._keys()) is None
+    def corners(data):  # luminosité des coins par rapport au centre
+        d = data.astype(float)
+        h, w = d.shape[:2]
+        return d[:40, :40].mean() / d[h // 2 - 20 : h // 2 + 20, w // 2 - 20 : w // 2 + 20].mean()
+
+    m, widget = window.m, window.control.flatfield
+    m.camera.set_property("Échantillon", "vide")  # une zone vide de la lame
+    assert not widget.enable.isChecked() and "Aucune référence" in widget.status.text()
+    assert corners(m.snap().data) < 0.9  # vignettage du simulateur
+
+    # activée sans référence : dit quoi faire, les captures le signalent
+    widget.enable.setChecked(True)
+    assert m.flatfield.enabled and not m.flatfield.active
+    assert "Prendre la référence" in widget.status.text()
+    window._on_snap(m.snap())
+    qtbot.waitUntil(lambda: not window.gallery._reserved, timeout=10000)
+    assert "NON corrigé" in window.statusBar().currentMessage()
+
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: asked.append(a[2]) or QMessageBox.Yes)
+    widget.take_btn.click()
+    qtbot.waitUntil(lambda: m.flatfield.active, timeout=20000)
+    assert asked == [] and "Fond corrigé" in widget.status.text()
+    assert window.assistants.illumination.reference.enable.isChecked()  # même état partout
+    frame = m.snap()
+    assert corners(frame.data) == pytest.approx(1.0, abs=0.02)
+    assert frame.metadata.extra["flat_field_corrected"] is True
+    window.live.start()
+    qtbot.waitUntil(lambda: "Live" in window.scope_viewer.layers, timeout=5000)
+    qtbot.wait(300)
+    assert corners(np.asarray(window.scope_viewer.layers["Live"].data)) == pytest.approx(1.0, abs=0.02)
+    window.live.stop()
+    window._on_snap(m.snap())
+    qtbot.waitUntil(lambda: not window.gallery._reserved, timeout=10000)
+    assert "fond corrigé" in window.statusBar().currentMessage()
+
+    # autre objectif : pas de référence pour lui, la correction se suspend et le dit
+    other = next(o.label for o in m.profile.objectives if o.label != m.objective.label)
+    m.set_objective(other)
+    qtbot.waitUntil(lambda: "Pas de référence" in widget.status.text(), timeout=3000)
+    assert not m.flatfield.active and corners(m.snap().data) < 0.9
+    widget.enable.setChecked(False)
+    assert "Aucune référence" in widget.status.text()
+
+
+def test_doubtful_reference_images_are_refused_or_questioned(window, qtbot, monkeypatch):
+    from qtpy.QtWidgets import QMessageBox
+
+    m, widget = window.m, window.control.flatfield
+    warned, asked = [], []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warned.append(a[2]))
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: asked.append(a[2]) or QMessageBox.No)
+    # un échantillon dans le champ : question, et « non » n'enregistre rien
+    widget.take_btn.click()
+    qtbot.waitUntil(lambda: bool(asked), timeout=20000)
+    qtbot.waitUntil(lambda: widget.take_btn.isEnabled(), timeout=5000)
+    assert "zone vide" in asked[0] and not m.flatfield.store.exists(*m.flatfield.keys())
+    # image saturée : refusée, avec la marche à suivre
+    m.camera.set_property("Échantillon", "vide")
+    m.camera.set_exposure(m.camera.get_exposure() * 40)
+    widget.take_btn.click()
+    qtbot.waitUntil(lambda: bool(warned), timeout=20000)
+    assert "saturée" in warned[0] and "Réduisez l'exposition" in warned[0]
+    assert not m.flatfield.store.exists(*m.flatfield.keys())
 
 
 def test_focus_peaking_layer_is_scaled_to_the_image(window):
@@ -739,51 +775,65 @@ def test_window_fits_a_small_laptop_screen(qtbot, tmp_path):
 
 def test_live_compositions_by_hand_from_the_acquisition_section(window, qtbot):
     """Profondeur de champ étendue en tournant la mise au point, panorama en poussant la
-    lame : comme sur le Leitz manuel, mais avec le simulateur."""
+    lame sans s'arrêter : comme sur le Leitz manuel, mais avec le simulateur."""
+    from fuji.ui.compose_panel import INSET
+
     m, compose, viewer = window.m, window.compose, window.scope_viewer
     window.sidebar.select("acquisition")
 
     m.camera.set_property("Épaisseur de l'échantillon", 40.0)
     compose.start("edf")
-    assert compose.running and window.live.running
+    assert compose.running and compose.kind == "edf" and window.live.running
+    assert viewer.text_overlay.visible and "mise au point" in viewer.text_overlay.text
     for z in (-20, -10, 0, 10, 20):
         m.focus.move_to(z)
         qtbot.wait(500)
     qtbot.waitUntil(lambda: "Composition" in viewer.layers and compose.finish_btn.isEnabled(), timeout=10000)
-    assert not viewer.layers["Live"].visible  # on regarde l'image qui se construit
+    # l'image composée prend la vue ; le live reste visible, en vignette dans un coin
+    live = viewer.layers["Live"]
+    assert live.visible and float(live.scale[-1]) == pytest.approx(INSET * m.pixel_size_um())
+    assert viewer.layers.index("Composition") < viewer.layers.index("Live")
+    compose.restart()  # « Recommencer » : on repart de zéro, sans quitter
+    assert compose.running and compose._engine.status.frames <= 1
+    for z in (-20, 0, 20):
+        m.focus.move_to(z)
+        qtbot.wait(400)
+    qtbot.waitUntil(lambda: compose.finish_btn.isEnabled(), timeout=10000)
     compose.finish()
     qtbot.waitUntil(lambda: bool(window.gallery.entries()) and not window.gallery._reserved, timeout=10000)
     edf = window.gallery.entries()[0]
     assert edf.kind == "edf" and edf.name == "profondeur_001" and "images fusionnées" in edf.summary
     assert "Composition" not in viewer.layers and viewer.layers["Live"].visible
+    assert float(viewer.layers["Live"].scale[-1]) == pytest.approx(m.pixel_size_um())  # live en grand
+    assert not viewer.text_overlay.visible
 
     m.camera.set_property("Épaisseur de l'échantillon", 0.0)
     m.focus.move_to(0)
     compose.start("panorama")
-    # la « main » avance par à-coups de 250 ms : sur une machine lente, une pause à mi-chemin
-    # suffit à poser un champ (c'est voulu en vrai). Seuls les arrêts prévus apportent ici
-    # assez de surface nouvelle (≈ 54 %, contre 40 % au plus entre deux arrêts)
-    compose._engine.min_new = 0.45
-    here = (0.0, 0.0)
-    for n, stop in enumerate([(0.0, 0.0), (160.0, 0.0), (160.0, 120.0)], start=1):
-        for a in (0.25, 0.5, 0.75, 1.0):  # la main pousse la lame : un mouvement continu
-            m.xy_stage.move_to(here[0] + a * (stop[0] - here[0]), here[1] + a * (stop[1] - here[1]))
-            qtbot.wait(250)
-        here = stop
-        qtbot.waitUntil(lambda n=n: len(compose._engine.tiles) == n, timeout=15000)
+    field_h, field_w = m.camera.sensor_shape()
+    px = m.pixel_size_um()
+    # la main pousse la lame de 1,2 champ vers la droite, sans jamais s'arrêter
+    steps = 40
+    for i in range(1, steps + 1):
+        m.xy_stage.move_to(1.2 * field_w * px * i / steps, 0.0)
+        qtbot.wait(120)
+    qtbot.waitUntil(lambda: len(compose._engine.tiles) >= 4, timeout=15000)
     assert "Champ actuel" in viewer.layers and "Composition" in viewer.layers
-    assert compose.undo_btn.isEnabled()
+    assert "champs" in viewer.text_overlay.text and compose.undo_btn.isEnabled()
+    assert viewer.layers["Live"].translate[-1] > 0.5 * field_w * px  # le live suit la lame
+    qtbot.wait(800)  # la lame est arrêtée : plus aucun champ ne s'ajoute
+    count = len(compose._engine.tiles)
     compose.undo()
     qtbot.wait(800)  # la lame n'a pas bougé : le champ retiré ne revient pas
-    assert len(compose._engine.tiles) == 2
+    assert len(compose._engine.tiles) == count - 1
     compose.finish()
     qtbot.waitUntil(lambda: not compose.running, timeout=30000)
     qtbot.waitUntil(lambda: not window.gallery._reserved, timeout=10000)
     pano = window.gallery.entries()[0]
-    field_h, field_w = m.camera.sensor_shape()
-    assert pano.kind == "panorama" and "2 champs" in pano.summary
-    # deux champs côte à côte (la caméra simulée est tournée de 1,5° : léger décalage vertical)
-    assert pano.shape[1] > 1.4 * field_w and field_h <= pano.shape[0] < 1.05 * field_h
+    assert pano.kind == "panorama" and f"{count - 1} champs" in pano.summary
+    # plus large que haut : au moins 1,7 champ de large (la caméra simulée est tournée de 1,5°)
+    assert pano.shape[1] > 1.7 * field_w and field_h <= pano.shape[0] < 1.1 * field_h
+    assert tuple(viewer.layers["Live"].translate[-2:]) == (0.0, 0.0)
 
     compose.start("edf")  # annuler : rien n'est ajouté
     qtbot.wait(300)

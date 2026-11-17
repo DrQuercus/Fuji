@@ -14,9 +14,11 @@ callbacks (elle interroge plutôt l'état avec un minuteur).
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from enum import Enum
 from typing import Any, ClassVar
 
@@ -24,6 +26,8 @@ import numpy as np
 from psygnal import Signal
 
 from .properties import PropertyInfo, PropertyRegistry
+
+log = logging.getLogger(__name__)
 
 
 class DeviceKind(str, Enum):
@@ -124,6 +128,11 @@ class Camera(Device):
         self._frame_cond = threading.Condition()
         self._live_thread: threading.Thread | None = None
         self._live_stop = threading.Event()
+        #: Traitement appliqué à chaque image dès sa sortie de la caméra (correction du fond
+        #: par l'image de référence, voir :mod:`fuji.core.flatfield`) : le live, les captures
+        #: et les acquisitions voient la même image. ``None`` : images brutes.
+        self.frame_filter: Callable[[np.ndarray], np.ndarray] | None = None
+        self._filter_failed = False
 
     # --- à implémenter par les pilotes ---
     @abstractmethod
@@ -197,8 +206,9 @@ class Camera(Device):
         """Acquiert une image fraîche."""
         with self._lock:
             img = self._snap()
-        self._publish(img)
-        return img
+        if img is self._latest:  # prise dans le flux du live : déjà publiée (et filtrée)
+            return img
+        return self._publish(img)
 
     def auto_expose(self, target: float = 0.7, *, max_iterations: int = 8) -> float:
         """Règle l'exposition pour que les hautes lumières atteignent ``target`` (fraction
@@ -255,13 +265,25 @@ class Camera(Device):
     def _check_alive(self) -> None:
         """Surchargée par les pilotes : lève une erreur claire si la caméra est perdue."""
 
-    def _publish(self, img: np.ndarray) -> None:
+    def _publish(self, img: np.ndarray) -> np.ndarray:
+        """Met une nouvelle image à disposition (après :attr:`frame_filter`) et la renvoie."""
+        arrived = time.monotonic()
+        flt = self.frame_filter
+        if flt is not None:
+            try:
+                img = flt(img)
+                self._filter_failed = False
+            except Exception:  # une correction en panne ne doit jamais arrêter le live
+                if not self._filter_failed:
+                    self._filter_failed = True
+                    log.exception("%s : traitement des images en échec, images brutes", self.name)
         with self._frame_cond:
             self._latest = img
-            self._latest_time = time.monotonic()
+            self._latest_time = arrived
             self._frame_count += 1
             self._frame_cond.notify_all()
         self.frame_ready.emit(img)
+        return img
 
     # --- live ---
     @property

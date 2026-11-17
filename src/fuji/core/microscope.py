@@ -31,6 +31,7 @@ from .devices import (
     StateDevice,
     XYStage,
 )
+from .flatfield import FlatFieldCorrection
 from .frame import Frame, FrameMetadata
 from .manual import ManualActionHandler
 from .profile import (
@@ -72,6 +73,8 @@ class Microscope:
         self.focus: FocusDrive | None = None
         self.objective_changer: StateDevice | None = None
         self.transmitted_light: LightSource | None = None
+        #: correction du fond par l'image de référence, appliquée à la sortie de la caméra
+        self.flatfield = FlatFieldCorrection(self)
 
     @classmethod
     def from_file(cls, name_or_path: str | Path, **kwargs: Any) -> Microscope:
@@ -379,6 +382,8 @@ class Microscope:
             elif isinstance(dev, LightSource):
                 md.devices[dev.name] = {"on": dev.is_on(), "intensity": dev.get_intensity()}
         md.extra["microscope"] = self.profile.name
+        if self.flatfield.active:
+            md.extra["flat_field_corrected"] = True
         return md
 
     # ------------------------------------------------------------------ profil
