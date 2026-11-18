@@ -155,11 +155,68 @@ def sharpen(image: Image) -> Image:
     return _apply(image, lambda a: _correlate3(a, kernel) / 4.0, "accentuée")
 
 
+def _edges_other(image: Image, method: str, sigma: float, low: float, high: float) -> Image:
+    """Autres détecteurs de bords que le Sobel d'ImageJ (ou Sobel après un lissage)."""
+    from skimage import feature
+    from skimage import filters as skf
+
+    def one(a: np.ndarray) -> np.ndarray:
+        g = a.astype(np.float64)
+        if sigma > 0:
+            g = ndi.gaussian_filter(g, sigma, mode="nearest")
+        if method.startswith("Canny"):
+            top = float(g.max() - g.min()) or 1.0
+            edges = feature.canny(
+                g,
+                sigma=0.0,
+                low_threshold=low / 100 * top * 0.5,
+                high_threshold=max(high, low) / 100 * top * 0.5,
+            )
+            from .adjust import white_level
+
+            return edges.astype(np.float64) * white_level(a)
+        if method == "Laplacien":
+            return np.abs(ndi.laplace(g, mode="nearest"))
+        fn = {"Scharr": skf.scharr, "Prewitt": skf.prewitt}.get(method, skf.sobel)
+        # même échelle que le Sobel d'ImageJ (noyau entier, sans division)
+        return fn(g, mode="nearest") * 4.0 * np.sqrt(2)
+
+    return _apply(image, one, "contours")
+
+
 @operation("Détecter les contours", category="Filtres", imagej="Process > Find Edges")
-def find_edges(image: Image) -> Image:
-    """Filtre de Sobel 3×3 : racine de la somme des carrés des deux dérivées.
+def find_edges(
+    image: Image,
+    method: Annotated[
+        Literal["Sobel (ImageJ)", "Scharr", "Prewitt", "Laplacien", "Canny (contours fins)"],
+        Param(
+            label="méthode", description="Canny donne des contours d'un pixel, les autres une force de bord"
+        ),
+    ] = "Sobel (ImageJ)",
+    sigma: Annotated[
+        float,
+        Param(
+            label="lissage avant",
+            min=0,
+            max=20,
+            step=0.1,
+            unit="px",
+            description="flou appliqué d'abord, pour ne pas suivre le bruit (Canny : 1 à 3)",
+        ),
+    ] = 0.0,
+    low: Annotated[
+        float, Param(label="seuil bas (Canny)", min=0, max=100, step=1, unit="%", advanced=True)
+    ] = 10.0,
+    high: Annotated[
+        float, Param(label="seuil haut (Canny)", min=0, max=100, step=1, unit="%", advanced=True)
+    ] = 20.0,
+) -> Image:
+    """Fait ressortir les bords. Par défaut : filtre de Sobel 3×3 d'ImageJ (racine de la somme
+    des carrés des deux dérivées).
 
     En 8 bits la valeur est tronquée (comme ImageJ) ; en 16 bits elle est arrondie."""
+    if method != "Sobel (ImageJ)" or sigma > 0:
+        return _edges_other(image, method, sigma, low, high)
 
     def one(a: np.ndarray) -> np.ndarray:
         s1 = _correlate3(a, [[1, 2, 1], [0, 0, 0], [-1, -2, -1]])

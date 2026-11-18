@@ -42,6 +42,28 @@ def _gray_values(image: Image) -> np.ndarray:
     return ij.intensity_plane(image.data, image.is_rgb)
 
 
+def _smoothed(values: np.ndarray, sigma: float) -> np.ndarray:
+    """Flou gaussien léger avant un seuillage (le type des pixels est gardé)."""
+    if sigma <= 0:
+        return values
+    out = ndi.gaussian_filter(values.astype(np.float64), sigma, mode="nearest")
+    return ij.restore_dtype(out, values)
+
+
+def _clean(mask: np.ndarray, fill_holes: bool, min_size: int) -> np.ndarray:
+    """Nettoyage d'un masque dans la foulée du seuillage : trous bouchés, petites taches ôtées."""
+    if fill_holes:
+        mask = ndi.binary_fill_holes(mask)
+    if min_size > 0:
+        lab, n = ndi.label(mask, structure=np.ones((3, 3)))
+        if n:
+            sizes = np.bincount(lab.ravel())
+            keep = sizes >= min_size
+            keep[0] = False
+            mask = keep[lab]
+    return mask
+
+
 @operation("Seuillage automatique", category="Segmentation", imagej="Image > Adjust > Threshold... (Auto)")
 def auto_threshold(
     image: Image,
@@ -50,13 +72,38 @@ def auto_threshold(
         Literal["clairs", "sombres"],
         Param(label="objets", description="sombres : cellules sur fond clair (fond clair)"),
     ] = "clairs",
+    smooth: Annotated[
+        float,
+        Param(
+            label="lisser avant",
+            min=0,
+            max=20,
+            step=0.5,
+            unit="px",
+            description="flou léger avant de seuiller : contours moins déchiquetés (0 : aucun)",
+        ),
+    ] = 0.0,
+    fill_holes: Annotated[
+        bool, Param(label="remplir les trous", description="bouche les trous à l'intérieur des objets")
+    ] = False,
+    min_size: Annotated[
+        int,
+        Param(
+            label="retirer les objets de moins de",
+            min=0,
+            max=100000,
+            unit="px",
+            description="efface les taches plus petites que cette surface (0 : tout garder)",
+        ),
+    ] = 0,
 ) -> Labels:
     """Masque binaire des objets, avec les 17 méthodes d'ImageJ (mêmes noms, mêmes niveaux).
 
-    « clairs » correspond à la case « Dark background » d'ImageJ."""
-    values = _gray_values(image)
+    « clairs » correspond à la case « Dark background » d'ImageJ. Les trois derniers réglages
+    nettoient le masque dans la foulée (à zéro : le masque d'ImageJ, tel quel)."""
+    values = _smoothed(_gray_values(image), smooth)
     lower, upper = threshold_range(values, method, dark_background=objects == "clairs")
-    mask = (values >= lower) & (values <= upper)
+    mask = _clean((values >= lower) & (values <= upper), fill_holes, min_size)
     return Labels(
         mask.astype(np.uint8),
         image.pixel_size_um,
@@ -88,10 +135,34 @@ def manual_threshold(
             description="les pixels plus clairs que cette valeur sont écartés",
         ),
     ] = 255.0,
+    smooth: Annotated[
+        float,
+        Param(
+            label="lisser avant",
+            min=0,
+            max=20,
+            step=0.5,
+            unit="px",
+            description="flou léger avant de seuiller : contours moins déchiquetés (0 : aucun)",
+        ),
+    ] = 0.0,
+    fill_holes: Annotated[
+        bool, Param(label="remplir les trous", description="bouche les trous à l'intérieur des objets")
+    ] = False,
+    min_size: Annotated[
+        int,
+        Param(
+            label="retirer les objets de moins de",
+            min=0,
+            max=100000,
+            unit="px",
+            description="efface les taches plus petites que cette surface (0 : tout garder)",
+        ),
+    ] = 0,
 ) -> Labels:
     """Garde les pixels dont la valeur est entre le minimum et le maximum (inclus)."""
-    gray = _gray_values(image)
-    mask = (gray >= lower) & (gray <= upper)
+    gray = _smoothed(_gray_values(image), smooth)
+    mask = _clean((gray >= lower) & (gray <= upper), fill_holes, min_size)
     return Labels(mask.astype(np.uint8), image.pixel_size_um, f"{image.name} (masque)")
 
 
@@ -113,12 +184,42 @@ def local_threshold_op(
             label="paramètre 2", min=-1e6, description="0 = valeur par défaut de la méthode", advanced=True
         ),
     ] = 0.0,
+    smooth: Annotated[
+        float,
+        Param(
+            label="lisser avant",
+            min=0,
+            max=20,
+            step=0.5,
+            unit="px",
+            description="flou léger avant de seuiller : contours moins déchiquetés (0 : aucun)",
+        ),
+    ] = 0.0,
+    fill_holes: Annotated[
+        bool, Param(label="remplir les trous", description="bouche les trous à l'intérieur des objets")
+    ] = False,
+    min_size: Annotated[
+        int,
+        Param(
+            label="retirer les objets de moins de",
+            min=0,
+            max=100000,
+            unit="px",
+            description="efface les taches plus petites que cette surface (0 : tout garder)",
+        ),
+    ] = 0,
 ) -> Labels:
     """Seuil calculé pour chaque pixel d'après son voisinage : utile quand l'éclairage est
     inégal ou le contraste variable. L'image est d'abord ramenée à 8 bits, comme dans Fiji."""
     mask = local_threshold(
-        _gray_values(image), method, radius, param1, param2, bright_objects=objects == "clairs"
+        _smoothed(_gray_values(image), smooth),
+        method,
+        radius,
+        param1,
+        param2,
+        bright_objects=objects == "clairs",
     )
+    mask = _clean(mask > 0, fill_holes, min_size)
     return Labels(mask.astype(np.uint8), image.pixel_size_um, f"{image.name} (masque local {method})")
 
 

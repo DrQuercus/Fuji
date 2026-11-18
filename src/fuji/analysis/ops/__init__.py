@@ -1,6 +1,7 @@
 """Opérations d'analyse fournies (importées pour être enregistrées)."""
 
 from . import (  # noqa: F401
+    adjust,
     analyze,
     arith,
     basic,

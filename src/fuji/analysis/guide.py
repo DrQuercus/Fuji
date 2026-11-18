@@ -60,8 +60,12 @@ MENUS: tuple[Menu, ...] = (
         "ameliorer",
         "Améliorer l'image",
         "wand",
-        "Contraste, bruit, netteté, éclairage inégal",
+        "Luminosité, contraste, couleurs, bruit, netteté",
         (
+            "Réglages de l'image",
+            "Niveaux",
+            "Balance des couleurs",
+            "Réduire le bruit",
             "Rehausser le contraste",
             "Contraste local (CLAHE)",
             "Soustraction de fond",
@@ -210,6 +214,22 @@ OTHER_MENU = Menu("autres", "Autres outils", "sparkle", "Ajoutés par des extens
 
 HELP: dict[str, Help] = {
     # --- améliorer l'image
+    "Réglages de l'image": Help(
+        "Luminosité, contraste, couleurs, netteté et bruit, en un seul outil",
+        "Préparer une image à montrer, comme dans un logiciel de photo. Tout se règle avec l'aperçu.",
+    ),
+    "Niveaux": Help(
+        "Choisit ce qui devient noir, blanc, et les tons moyens",
+        "Écrire dans les pixels le contraste réglé à l'écran, ou corriger un canal de couleur.",
+    ),
+    "Balance des couleurs": Help(
+        "Renforce ou atténue le rouge, le vert et le bleu",
+        "Dominante de couleur à retirer à la main ; canaux de fluorescence à équilibrer.",
+    ),
+    "Réduire le bruit": Help(
+        "Atténue le grain de la caméra en gardant les contours",
+        "Image sombre ou prise avec un fort gain. Plusieurs méthodes, de la plus rapide à la plus soignée.",
+    ),
     "Rehausser le contraste": Help(
         "Étale les niveaux pour utiliser toute la dynamique",
         "Image terne ou sombre que l'on veut lisible (attention : change les valeurs mesurées).",
@@ -584,7 +604,10 @@ RECIPES: tuple[Recipe, ...] = (
         (
             Step("Fond neutre.", "Balance des blancs", optional=True),
             Step("Éclairage plus régulier.", "Soustraction de fond", optional=True),
-            Step("Un peu plus de netteté.", "Masque flou (netteté)", optional=True),
+            Step(
+                "Luminosité, contraste, couleurs, netteté : réglez à l'œil, avec l'aperçu.",
+                "Réglages de l'image",
+            ),
             Step("Exporter ce qui est affiché, avec la barre d'échelle : menu Fichier → Exporter la vue."),
         ),
     ),

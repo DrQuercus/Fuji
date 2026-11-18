@@ -95,7 +95,8 @@ def test_advanced_settings_are_reachable_in_every_tool(qtbot):
 def test_wrong_saved_values_are_ignored(qtbot):
     form = _form(qtbot, "Seuillage automatique")
     form.set_values({"method": "Otsu", "objects": "violets", "inconnu": 3})
-    assert form.values() == {"method": "Otsu", "objects": "clairs"}
+    values = form.values()
+    assert values["method"] == "Otsu" and values["objects"] == "clairs" and "inconnu" not in values
 
 
 def test_lengths_show_their_size_in_micrometres(window):

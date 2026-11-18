@@ -254,11 +254,35 @@ def colour_deconvolution_op(
 
 # -------------------------------------------------------------- balance, seuil
 @operation("Balance des blancs", category="Couleur", imagej="Image > Adjust > Color Balance...")
-def white_balance(image: Image, background: Rois | None = None) -> Image:
+def white_balance(
+    image: Image,
+    background: Rois | None = None,
+    brightest: Annotated[
+        float,
+        Param(
+            label="pixels clairs pris pour le fond",
+            min=0.1,
+            max=50,
+            step=0.1,
+            unit="%",
+            description="sans ROI de fond : part des pixels les plus clairs qui sert de référence",
+        ),
+    ] = 5.0,
+    strength: Annotated[
+        float,
+        Param(label="force", min=0, max=100, step=1, unit="%", description="100 % : fond tout à fait neutre"),
+    ] = 100.0,
+    target: Annotated[
+        Literal["garder la luminosité", "fond blanc"],
+        Param(
+            label="fond", description="« fond blanc » amène aussi le fond au blanc pur (lames en fond clair)"
+        ),
+    ] = "garder la luminosité",
+) -> Image:
     """Rend le fond neutre (gris ou blanc) en ajustant le gain de chaque canal.
 
-    Le fond est la moyenne des ROI fournies (zone vide de la lame), ou à défaut des 5 %
-    de pixels les plus clairs. Le canal le plus fort n'est pas modifié."""
+    Le fond est la moyenne des ROI fournies (zone vide de la lame), ou à défaut des pixels
+    les plus clairs (5 %). Le canal le plus fort n'est pas modifié, sauf avec « fond blanc »."""
     rgb = _require_rgb(image).astype(np.float64)
     if background is not None and len(background):
         sel = np.zeros(rgb.shape[:2], bool)
@@ -269,12 +293,20 @@ def white_balance(image: Image, background: Rois | None = None) -> Image:
             raise ValueError("La ROI de fond ne recouvre pas l'image")
     else:
         gray = rgb.mean(axis=-1)
-        sel = gray >= np.percentile(gray, 95)
+        sel = gray >= np.percentile(gray, 100.0 - brightest)
     means = rgb[sel].mean(axis=0)
     if (means <= 0).any():
         raise ValueError("Le fond est noir dans un des canaux : balance impossible")
+    goal = means.max()
+    if target == "fond blanc":
+        from .adjust import white_level
+
+        goal = white_level(image.data)
+    gains = 1.0 + (goal / means - 1.0) * (strength / 100.0)
     out = image.data.astype(np.float64).copy()
-    out[..., :3] = rgb * (means.max() / means)
+    out[..., :3] = rgb * gains
+    if target == "fond blanc":
+        np.minimum(out[..., :3], goal, out=out[..., :3])  # rien au-delà du blanc
     return image.with_data(ij.restore_dtype(out, image.data), name=f"{image.name} (balance)")
 
 

@@ -45,7 +45,7 @@ from ..components import button, label
 
 _SLIDER_STEPS = 1000
 #: au-delà de ce rapport max / min, le curseur est logarithmique
-_LOG_RATIO = 200.0
+_LOG_RATIO = 20.0
 
 
 def _decimals(lo: float, hi: float, step: float | None) -> int:
@@ -103,8 +103,8 @@ class SliderSpin(QWidget):
         self.slider.setMinimumWidth(70)
         self.spin: QSpinBox | QDoubleSpinBox = QSpinBox() if integer else QDoubleSpinBox()
         self.spin.setKeyboardTracking(False)
-        self.spin.setMinimumWidth(72)
-        self.spin.setMaximumWidth(110)
+        self.spin.setMinimumWidth(64)
+        self.spin.setMaximumWidth(84)
         lay.addWidget(self.slider, 1)
         lay.addWidget(self.spin)
         self.set_range(lo, hi)
