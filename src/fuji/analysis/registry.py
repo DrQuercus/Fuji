@@ -49,6 +49,12 @@ class Param:
     description: str = ""
     advanced: bool = False
     multiline: bool = False
+    #: « image » : les bornes du réglage sont celles des pixels de l'image choisie (un seuil
+    #: va du pixel le plus sombre au plus clair)
+    span: str = ""
+    #: valeur de départ d'un réglage dont les bornes suivent l'image : « min », « max »,
+    #: « milieu »
+    start: str = ""
 
 
 #: Noms français des réglages courants (quand l'opération n'en donne pas).

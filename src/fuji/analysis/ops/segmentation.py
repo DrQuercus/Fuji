@@ -68,8 +68,26 @@ def auto_threshold(
 @operation("Seuil manuel", category="Segmentation", imagej="Image > Adjust > Threshold...")
 def manual_threshold(
     image: Image,
-    lower: Annotated[float, Param(label="minimum", min=-1e9)] = 0.0,
-    upper: Annotated[float, Param(label="maximum", min=-1e9)] = 255.0,
+    lower: Annotated[
+        float,
+        Param(
+            label="minimum",
+            min=-1e9,
+            span="image",
+            start="milieu",
+            description="les pixels plus sombres que cette valeur sont écartés",
+        ),
+    ] = 0.0,
+    upper: Annotated[
+        float,
+        Param(
+            label="maximum",
+            min=-1e9,
+            span="image",
+            start="max",
+            description="les pixels plus clairs que cette valeur sont écartés",
+        ),
+    ] = 255.0,
 ) -> Labels:
     """Garde les pixels dont la valeur est entre le minimum et le maximum (inclus)."""
     gray = _gray_values(image)

@@ -28,10 +28,10 @@ peut s'appliquer au plan affiché ou à toute la pile.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import numpy as np
-from magicgui.widgets import Container, create_widget
 from napari.components import ViewerModel
 from napari.layers import Image as ImageLayer
 from napari.layers import Labels as LabelsLayer
@@ -47,6 +47,7 @@ from qtpy.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -60,6 +61,8 @@ from fuji.analysis.registry import Operation, combine_planes
 from .. import documents
 from ..components import button, icon_button, label, separator
 from ..flow import FlowLayout
+from ..prefs import settings
+from .param_form import ParamForm
 from .tool_menu import RecipePage, ToolMenu
 
 _NONE = "(aucune)"
@@ -208,7 +211,8 @@ class AnalysisPanel(QWidget):
         self.expert = False
         self._op: Operation | None = None
         self._inputs: dict[str, QComboBox] = {}
-        self._params: Container | None = None
+        self._params = ParamForm()
+        self._params.changed.connect(self._schedule_preview)
         self._busy = False
         self._preview_pending = False
         self._run_pending = False
@@ -303,11 +307,38 @@ class AnalysisPanel(QWidget):
         self.whole_stack.setToolTip(
             "Applique l'opération à chaque plan de la pile, et pas seulement au plan affiché"
         )
-        options = QHBoxLayout()
-        options.addWidget(self.preview)
-        options.addWidget(self.whole_stack)
-        options.addStretch(1)
-        olay.addLayout(options)
+        # pendant l'aperçu : revoir l'image d'origine (bouton à maintenir), régler la
+        # transparence de ce qui est superposé
+        self.compare_btn = button(
+            "Voir l'original",
+            "search",
+            object_name="ghost",
+            tooltip="Maintenez le bouton enfoncé : l'aperçu se cache, pour comparer avant / après",
+        )
+        self.compare_btn.pressed.connect(lambda: self._set_preview_visible(False))
+        self.compare_btn.released.connect(lambda: self._set_preview_visible(True))
+        self.preview_opacity = QSlider(Qt.Orientation.Horizontal)
+        self.preview_opacity.setRange(10, 100)
+        self.preview_opacity.setValue(int(settings().value("analysis/preview_opacity", 100, type=int)))
+        self.preview_opacity.setMaximumWidth(110)
+        self.preview_opacity.setToolTip("Opacité de l'aperçu (un masque à 50 % laisse voir l'image dessous)")
+        self.preview_opacity.valueChanged.connect(self._preview_opacity_changed)
+        self.opacity_box = QWidget()
+        ob = QHBoxLayout(self.opacity_box)
+        ob.setContentsMargins(0, 0, 0, 0)
+        ob.setSpacing(6)
+        ob.addWidget(label("Opacité de l'aperçu", "hint", wrap=False))
+        ob.addWidget(self.preview_opacity)
+        options = FlowLayout(spacing=10, line_spacing=4)
+        options.setContentsMargins(0, 0, 0, 0)
+        for w in (self.preview, self.compare_btn, self.opacity_box, self.whole_stack):
+            options.addWidget(w)
+        options_box = QWidget()
+        options_box.setLayout(options)
+        policy = options_box.sizePolicy()
+        policy.setHeightForWidth(True)
+        options_box.setSizePolicy(policy)
+        olay.addWidget(options_box)
         self.run_btn = QPushButton("Exécuter")
         self.run_btn.setObjectName("primary")
         self.run_btn.clicked.connect(self._run)
@@ -479,7 +510,7 @@ class AnalysisPanel(QWidget):
         if step.operation:
             self.select_operation(step.operation, in_recipe=True)
             for name, value in step.params:
-                widget = next((w for w in self._params or [] if w.name == name), None)
+                widget = next((w for w in self._params if w.name == name), None)
                 if widget is None:
                     continue
                 if value == GUESS and name == "objects":
@@ -554,6 +585,7 @@ class AnalysisPanel(QWidget):
 
     # ------------------------------------------------------------- formulaire
     def _build_form(self, op: Operation) -> None:
+        self._params.setParent(None)  # le formulaire des réglages est réutilisé d'un outil à l'autre
         while self.form.rowCount():
             self.form.removeRow(0)
         self._inputs = {}
@@ -562,36 +594,12 @@ class AnalysisPanel(QWidget):
             combo.currentTextChanged.connect(self._input_changed)
             self._inputs[spec.name] = combo
             self.form.addRow(_INPUT_LABELS.get(spec.name, spec.name), combo)
-        widgets = []
-        for p in op.params:
-            if p.meta.advanced and not self.expert:
-                continue
-            opts: dict[str, Any] = {}
-            if p.meta.min is not None:
-                opts["min"] = p.meta.min
-            if p.meta.max is not None:
-                opts["max"] = p.meta.max
-            elif p.type in (int, float):
-                opts["max"] = 1e9
-            if p.meta.step is not None:
-                opts["step"] = p.meta.step
-            if p.meta.choices:
-                opts["choices"] = list(p.meta.choices)
-            label = p.label.rstrip("_")
-            label = label[:1].upper() + label[1:] + (f" ({p.meta.unit})" if p.meta.unit else "")
-            kwargs: dict[str, Any] = {"value": p.default, "label": label, "name": p.name, "options": opts}
-            if p.meta.multiline:
-                kwargs["widget_type"] = "TextEdit"
-            else:
-                kwargs["annotation"] = p.type
-            w = create_widget(**kwargs)
-            if p.meta.description:
-                w.tooltip = p.meta.description
-            widgets.append(w)
-        self._params = Container(widgets=widgets)
-        self._params.changed.connect(self._schedule_preview)
-        if widgets:
-            self.form.addRow(self._params.native)
+        self.form.addRow(self._params)
+        self._params.build(list(op.params), expert=self.expert)
+        # comme dans ImageJ : un outil garde les réglages de sa dernière utilisation
+        self._params.blockSignals(True)
+        self._params.set_values(self._remembered(op))
+        self._params.blockSignals(False)
         self._refresh_inputs()
 
     def _refresh_inputs(self, *_: Any) -> None:
@@ -652,6 +660,38 @@ class AnalysisPanel(QWidget):
         self.preview.setVisible(bool(produces_layers and op is not None and not op.stack))
         if self.whole_stack.isHidden():  # isHidden : état propre à la case, même panneau replié
             self.whole_stack.setChecked(False)
+        for w in (self.compare_btn, self.opacity_box):
+            w.setVisible(not self.preview.isHidden() and self.preview.isChecked())
+        self._update_context(primary)
+
+    def _update_context(self, primary: Any | None) -> None:
+        """Adapte les réglages à l'image choisie : équivalent en µm des longueurs en pixels,
+        bornes des seuils (du pixel le plus sombre au plus clair du plan affiché)."""
+        if primary is None:
+            self._params.set_context(None, None)
+            return
+        data_range = None
+        integer = np.issubdtype(np.dtype(primary.data.dtype), np.integer)
+        if any(c.spec.meta.span == "image" for c in self._params):
+            try:
+                plane, _ = displayed_plane(primary, self.viewer)
+                step = max(1, int(np.sqrt(plane.shape[0] * plane.shape[1] / 250_000)))
+                sample = np.asarray(plane[::step, ::step])
+                data_range = (float(sample.min()), float(sample.max()))
+            except Exception:  # calque en cours de changement
+                data_range = None
+        self._params.blockSignals(True)
+        self._params.set_context(_pixel_size(primary), data_range, bool(integer))
+        self._params.blockSignals(False)
+
+    def _remembered(self, op: Operation) -> dict[str, Any]:
+        try:
+            return dict(json.loads(settings().value(f"analysis/params/{op.name}", "{}", type=str)))
+        except (TypeError, ValueError):
+            return {}
+
+    def _remember(self, op: Operation) -> None:
+        settings().setValue(f"analysis/params/{op.name}", json.dumps(self._params.values()))
 
     # ---------------------------------------------------------------- exécution
     def _convert(self, spec: Any, layer: Any, primary: Any | None, plane: bool) -> Any:
@@ -693,7 +733,7 @@ class AnalysisPanel(QWidget):
         return inputs, self._param_values()
 
     def _param_values(self) -> dict[str, Any]:
-        return {w.name: w.value for w in self._params} if self._params is not None else {}
+        return self._params.values()
 
     def _collect_planes(self) -> tuple[list[list[Any]], list[tuple[int, ...]], tuple[int, ...]]:
         """Une liste d'entrées par plan de la pile principale. Les autres piles de même
@@ -737,6 +777,7 @@ class AnalysisPanel(QWidget):
             return
         self._run_pending = False
         op = self._op
+        self._remember(op)
         self._preview_timer.stop()
         self._clear_preview()
         try:
@@ -794,6 +835,8 @@ class AnalysisPanel(QWidget):
 
     # ------------------------------------------------------------------- aperçu
     def _preview_toggled(self, on: bool) -> None:
+        for w in (self.compare_btn, self.opacity_box):
+            w.setVisible(on)
         if on:
             self._schedule_preview()
         else:
@@ -824,9 +867,22 @@ class AnalysisPanel(QWidget):
         worker.finished.connect(self._finished)
         worker.start()
 
+    def _preview_layers(self) -> list[Any]:
+        return [ly for ly in self.viewer.layers if ly.name.startswith(PREVIEW_PREFIX)]
+
     def _clear_preview(self) -> None:
-        for layer in [ly for ly in self.viewer.layers if ly.name.startswith(PREVIEW_PREFIX)]:
+        for layer in self._preview_layers():
             self.viewer.layers.remove(layer)
+
+    def _set_preview_visible(self, visible: bool) -> None:
+        """« Voir l'original » : cache l'aperçu tant que le bouton est enfoncé."""
+        for layer in self._preview_layers():
+            layer.visible = visible
+
+    def _preview_opacity_changed(self, value: int) -> None:
+        settings().setValue("analysis/preview_opacity", value)
+        for layer in self._preview_layers():
+            layer.opacity = value / 100
 
     # ------------------------------------------------------------------ sorties
     def _show_outputs(
@@ -853,6 +909,8 @@ class AnalysisPanel(QWidget):
                 continue
             self._add_layer(item, offset, PREVIEW_PREFIX if preview else "", doc)
         if preview:
+            for layer in self._preview_layers():
+                layer.opacity = self.preview_opacity.value() / 100
             if selected is not None and selected.name in self.viewer.layers:
                 self.viewer.layers.selection.active = selected
             return

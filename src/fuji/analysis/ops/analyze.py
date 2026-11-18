@@ -320,7 +320,7 @@ def clear_rois(
     roi: Rois,
     where: Annotated[Literal["extérieur", "intérieur"], Param(label="zone à effacer")] = "extérieur",
     value: Annotated[
-        float, Param(label="valeur", min=-1e9, description="valeur donnée aux pixels effacés")
+        float, Param(label="valeur", min=-1e9, span="image", description="valeur donnée aux pixels effacés")
     ] = 0.0,
 ) -> Image:
     """Met à une valeur fixe tout ce qui est hors des ROI (ou dedans)."""
@@ -500,10 +500,10 @@ def colocalization_op(
         Literal["Costes (automatiques)", "manuels", "aucun"], Param(label="seuils")
     ] = "Costes (automatiques)",
     threshold1: Annotated[
-        float, Param(label="seuil canal 1", min=-1e9, description="pour « manuels »")
+        float, Param(label="seuil canal 1", min=-1e9, span="image", description="pour « manuels »")
     ] = 0.0,
     threshold2: Annotated[
-        float, Param(label="seuil canal 2", min=-1e9, description="pour « manuels »")
+        float, Param(label="seuil canal 2", min=-1e9, span="image", description="pour « manuels »")
     ] = 0.0,
 ) -> Table:
     """Mesure à quel point deux marquages se superposent : corrélation de Pearson,
