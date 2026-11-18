@@ -190,7 +190,8 @@ def measure_rois(plane: np.ndarray, rois: Rois, px: float = 1.0) -> pd.DataFrame
             values = roi_profile(plane, rois, i)
             row["Length"] = rois.length(i) * px
             dx, dy = v[-1, 1] - v[0, 1], v[0, 0] - v[-1, 0]  # y vers le haut, comme ImageJ
-            row["Angle"] = math.degrees(math.atan2(dy, dx))
+            # tracé à trois points : l'angle au sommet du milieu (outil « Angle » d'ImageJ)
+            row["Angle"] = rois.angle(i) if len(v) == 3 else math.degrees(math.atan2(dy, dx))
             row.update(
                 {k: s for k, s in intensity_stats(values).items() if k in ("Mean", "StdDev", "Min", "Max")}
             )

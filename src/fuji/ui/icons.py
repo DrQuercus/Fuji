@@ -97,6 +97,14 @@ _PATHS: dict[str, str] = {
     "roi_polygon": '<path d="M5 9.5l6.5-5.5 7.5 4-2 10.5H7z"/>',
     "roi_line": '<path d="M5.5 18.5l13-13"/><circle cx="5.5" cy="18.5" r="1.7" fill="{c}"/>'
     '<circle cx="18.5" cy="5.5" r="1.7" fill="{c}"/>',
+    "roi_path": '<path d="M4.5 17.5l5-9.5 5 6.5 5-9"/><circle cx="4.5" cy="17.5" r="1.5" fill="{c}"/>'
+    '<circle cx="9.5" cy="8" r="1.5" fill="{c}"/><circle cx="14.5" cy="14.5" r="1.5" fill="{c}"/>'
+    '<circle cx="19.5" cy="5.5" r="1.5" fill="{c}"/>',
+    "roi_angle": '<path d="M18.5 5.5L5 18.5h15"/><path d="M12.5 18.5a7 7 0 0 0-2.2-5.1"/>',
+    "roi_free": '<path d="M6 13.5c-2.2-4 .8-8.3 5-7.8 3 .4 3.3 2.6 6 3.2 2.8.6 3.2 4.2-.5 6.7'
+    '-3.6 2.5-8.5 1.9-10.5-2.1z"/>',
+    "roi_edit": '<path d="M5 18.5L11 6.5l8.5 5"/><circle cx="11" cy="6.5" r="2.3" fill="{c}"/>'
+    '<circle cx="5" cy="18.5" r="1.5"/><circle cx="19.5" cy="11.5" r="1.5"/>',
     "roi_point": '<circle cx="12" cy="12" r="2.3" fill="{c}"/><path d="M12 4v4M12 16v4M4 12h4M16 12h4"/>',
     "gallery": '<rect x="3.5" y="7" width="14" height="12.5" rx="2"/><path d="M7 3.5h11.5a2 2 0 0 1 2 2V16"/>'
     '<path d="M4 17.5l4.2-4.2 3 3 2.3-2.3 4 4"/><circle cx="13.3" cy="10.8" r="1.2"/>',

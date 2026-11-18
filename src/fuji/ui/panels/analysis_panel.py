@@ -60,6 +60,7 @@ from fuji.analysis.registry import Operation, combine_planes
 
 from .. import documents
 from ..components import button, icon_button, label, separator
+from ..drawing import DrawingStyler
 from ..flow import FlowLayout
 from ..prefs import settings
 from .param_form import ParamForm
@@ -94,14 +95,24 @@ _MISSING_INPUT = {
     Rois: "Il manque une ROI : dessinez-la sur l'image (outils « Dessiner », en haut du panneau).",
     Points: "Il manque des points : posez-les sur l'image (outil « Points », en haut du panneau).",
 }
+_TOOL_WIDTH = 32  # largeur d'un bouton de la rangée « Dessiner »
 #: outils de dessin : (icône, info-bulle, type de calque, mode napari)
 _TOOLS = (
     ("roi_rect", "Rectangle", "shapes", "add_rectangle"),
     ("roi_ellipse", "Ellipse", "shapes", "add_ellipse"),
     ("roi_polygon", "Polygone (double-clic pour fermer)", "shapes", "add_polygon"),
+    ("roi_free", "Main levée : contour tracé à la souris, bouton enfoncé", "shapes", "add_polygon_lasso"),
     ("roi_line", "Ligne (profil, distance)", "shapes", "add_line"),
+    ("roi_path", "Trajet : ligne brisée, un clic par point (double-clic pour finir)", "shapes", "add_path"),
+    (
+        "roi_angle",
+        "Angle : trois clics, le sommet de l'angle en deuxième (double-clic au troisième)",
+        "shapes",
+        "add_path",
+    ),
     ("roi_point", "Points (comptage)", "points", "add"),
-    ("pointer", "Sélectionner et déplacer les formes", "shapes", "select"),
+    ("pointer", "Sélectionner et déplacer les formes (Suppr : effacer la forme choisie)", "shapes", "select"),
+    ("roi_edit", "Modifier une forme : tirer ses sommets", "shapes", "direct"),
     ("move", "Déplacer l'image (outil normal)", "", "pan_zoom"),
 )
 
@@ -229,13 +240,32 @@ class AnalysisPanel(QWidget):
         tools = FlowLayout(tools_box, spacing=2, line_spacing=2)
         tools.setContentsMargins(0, 0, 0, 0)
         tools.addWidget(label("Dessiner :", "hint", wrap=False))
+        self.tool_buttons: dict[str, QPushButton] = {}
         for icon_name, tip, kind, mode in _TOOLS:
             b = icon_button(icon_name, tip)
+            b.setFixedWidth(_TOOL_WIDTH)
             b.clicked.connect(lambda _=False, k=kind, m=mode: self.set_tool(k, m))
             tools.addWidget(b)
+            self.tool_buttons[icon_name] = b
         clear = icon_button("trash", "Effacer toutes les ROI et tous les points")
         clear.clicked.connect(self.clear_rois)
+        clear.setFixedWidth(_TOOL_WIDTH)
         tools.addWidget(clear)
+        # réglages du dessin : couleur, épaisseur, numéros et mesures affichés sur l'image
+        self.drawing = DrawingStyler(viewer, ROI_LAYER, POINTS_LAYER, self)
+        self.drawing_btn = icon_button(
+            "gear", "Réglages du dessin : couleur, épaisseur, remplissage, numéros, mesures sur l'image"
+        )
+        self.drawing_btn.setStyleSheet("QPushButton::menu-indicator { image: none; width: 0px; }")
+        self.drawing_menu = self.drawing.build_menu(self.drawing_btn)
+        self.drawing_btn.setMenu(self.drawing_menu)
+        self.drawing_btn.setFixedWidth(_TOOL_WIDTH)
+        tools.addWidget(self.drawing_btn)
+        self.roi_count = label("", "hint", wrap=False)
+        self.roi_count.setToolTip("Ce qui est dessiné sur l'image (les points servent à compter)")
+        self.roi_count.hide()
+        self.drawing.counted.connect(self._show_count)
+        tools.addWidget(self.roi_count)
         policy = tools_box.sizePolicy()
         policy.setHeightForWidth(True)
         tools_box.setSizePolicy(policy)
@@ -416,6 +446,15 @@ class AnalysisPanel(QWidget):
         direct s'arrête (sinon l'outil resterait actif ailleurs)."""
         self.set_tool("", "")
         self._stop_preview()
+
+    def _show_count(self, shapes: int, points: int) -> None:
+        parts = []
+        if shapes:
+            parts.append(f"{shapes} forme{'s' if shapes > 1 else ''}")
+        if points:
+            parts.append(f"{points} point{'s' if points > 1 else ''}")
+        self.roi_count.setText(" · ".join(parts))
+        self.roi_count.setVisible(bool(parts))
 
     def clear_rois(self) -> None:
         for name in (ROI_LAYER, POINTS_LAYER):

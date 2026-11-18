@@ -276,6 +276,35 @@ class Rois:
         pts = np.vstack([v, v[:1]]) if closed else v
         return float(np.hypot(*np.diff(pts, axis=0).T).sum())
 
+    def area(self, index: int) -> float:
+        """Surface géométrique d'une région, en pixels² (0 pour une ligne).
+
+        C'est la surface du tracé lui-même ; « Mesurer les ROI » compte les pixels dont le
+        centre est dedans, ce qui peut différer d'une fraction de pixel le long du bord."""
+        kind, v = self.kind(index), self.vertices(index)
+        if kind in ("line", "path") or len(v) < 3:
+            return 0.0
+        if kind == "ellipse":
+            a, b = float(np.hypot(*(v[1] - v[0]))) / 2.0, float(np.hypot(*(v[3] - v[0]))) / 2.0
+            return float(np.pi * a * b)
+        r, c = v[:, 0], v[:, 1]
+        return float(abs(np.dot(c, np.roll(r, -1)) - np.dot(r, np.roll(c, -1))) / 2.0)
+
+    def angle(self, index: int) -> float:
+        """Angle en degrés. Tracé à trois points : l'angle au sommet du milieu (0 à 180°,
+        l'outil « Angle » d'ImageJ). Ligne droite : son inclinaison sur l'horizontale, de
+        −180 à 180°, le haut de l'image comptant positivement (comme ImageJ)."""
+        v = self.vertices(index)
+        if len(v) == 3:
+            a, b = v[0] - v[1], v[2] - v[1]
+            na, nb = float(np.hypot(*a)), float(np.hypot(*b))
+            if na == 0 or nb == 0:
+                return 0.0
+            return float(np.degrees(np.arccos(np.clip(np.dot(a, b) / (na * nb), -1.0, 1.0))))
+        if len(v) == 2:
+            return float(np.degrees(np.arctan2(v[0][0] - v[1][0], v[1][1] - v[0][1])))
+        raise ValueError("Un angle se mesure sur une ligne ou sur un tracé à trois points")
+
 
 def _points_in_polygon(rr: np.ndarray, cc: np.ndarray, v: np.ndarray) -> np.ndarray:
     """Règle pair-impair, comme ``PolygonFiller`` d'ImageJ : sur une ligne de pixels, un
