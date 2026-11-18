@@ -351,6 +351,9 @@ class Plot:
     kind: str = "ligne"  # « ligne », « barres » ou « points »
     xlabel: str = ""
     ylabel: str = ""
+    #: couleur de chaque courbe (vide : les couleurs habituelles) — rouge, vert, bleu pour les
+    #: canaux d'une image couleur
+    colors: tuple[str, ...] = ()
 
 
 @dataclass

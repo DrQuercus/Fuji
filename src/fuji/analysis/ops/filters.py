@@ -143,16 +143,53 @@ def _correlate3(a: np.ndarray, kernel: list[list[float]]) -> np.ndarray:
 
 
 @operation("Lisser", category="Filtres", imagej="Process > Smooth")
-def smooth(image: Image) -> Image:
-    """Moyenne 3×3."""
-    return _apply(image, lambda a: _correlate3(a, [[1, 1, 1]] * 3) / 9.0, "lissée")
+def smooth(
+    image: Image,
+    passes: Annotated[
+        int,
+        Param(
+            label="nombre de passes",
+            min=1,
+            max=20,
+            description="lisser plusieurs fois de suite adoucit davantage (ImageJ : une passe)",
+        ),
+    ] = 1,
+) -> Image:
+    """Moyenne 3×3, répétée autant de fois que demandé."""
+
+    def one(a: np.ndarray) -> np.ndarray:
+        out = a.astype(np.float64)
+        for _ in range(max(1, int(passes))):
+            out = _correlate3(out, [[1, 1, 1]] * 3) / 9.0
+        return out
+
+    return _apply(image, one, "lissée")
 
 
 @operation("Accentuer", category="Filtres", imagej="Process > Sharpen")
-def sharpen(image: Image) -> Image:
-    """Accentuation 3×3 d'ImageJ (centre 12, voisins −1, divisé par 4)."""
+def sharpen(
+    image: Image,
+    strength: Annotated[
+        float,
+        Param(
+            label="force",
+            min=0,
+            max=300,
+            step=5,
+            unit="%",
+            description="100 % : l'accentuation d'ImageJ ; moins : plus discret ; plus : plus marqué",
+        ),
+    ] = 100.0,
+) -> Image:
+    """Accentuation 3×3 d'ImageJ (centre 12, voisins −1, divisé par 4), dosée par « force »."""
     kernel = [[-1, -1, -1], [-1, 12, -1], [-1, -1, -1]]
-    return _apply(image, lambda a: _correlate3(a, kernel) / 4.0, "accentuée")
+    k = float(strength) / 100.0
+
+    def one(a: np.ndarray) -> np.ndarray:
+        sharp = _correlate3(a, kernel) / 4.0
+        return sharp if k == 1.0 else a + (sharp - a) * k
+
+    return _apply(image, one, "accentuée")
 
 
 def _edges_other(image: Image, method: str, sigma: float, low: float, high: float) -> Image:

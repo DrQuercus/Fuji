@@ -174,23 +174,34 @@ def subtract_background(
         bool, Param(label="fond clair", description="cocher pour le fond clair")
     ] = False,
     smooth: Annotated[bool, Param(label="lisser", advanced=True)] = True,
+    output: Annotated[
+        Literal["image corrigée", "fond estimé"],
+        Param(
+            label="résultat",
+            description="« fond estimé » montre ce qui serait retiré : pour vérifier le rayon",
+        ),
+    ] = "image corrigée",
 ) -> Image:
     """Retire un fond lentement variable (éclairage inégal, autofluorescence).
 
     Même algorithme qu'ImageJ. Les images couleur sont traitées canal par canal (option
     « Separate colors » d'ImageJ). Avec « fond clair », le fond devient blanc : 255 en
-    8 bits, 65535 en 16 bits, comme dans ImageJ.
+    8 bits, 65535 en 16 bits, comme dans ImageJ. « Fond estimé » correspond à la case
+    « Create background » d'ImageJ.
     """
 
     def one(plane: np.ndarray) -> np.ndarray:
         bg = rolling_ball_background(plane, radius, light_background=light_background, smooth=smooth)
+        if output == "fond estimé":
+            return bg
         out = plane.astype(np.float32) - bg
         if light_background and np.issubdtype(plane.dtype, np.integer):
             out += np.iinfo(plane.dtype).max
         return out
 
     out = _per_channel(image, one)
-    return image.with_data(_restore_dtype(out, image.data), name=f"{image.name} (fond soustrait)")
+    suffix = "fond estimé" if output == "fond estimé" else "fond soustrait"
+    return image.with_data(_restore_dtype(out, image.data), name=f"{image.name} ({suffix})")
 
 
 def flat_field_correct(raw: np.ndarray, flat: np.ndarray, dark: np.ndarray | None = None) -> np.ndarray:

@@ -148,6 +148,12 @@ class PlotWidget(QWidget):
         self.log_y = not self.log_y
         self.update()
 
+    def _color(self, k: int) -> str:
+        """Couleur de la k-ième courbe : celle du graphique s'il en donne, sinon l'habituelle."""
+        if k < len(self.spec.colors):
+            return self.spec.colors[k]
+        return self.COLORS[k % len(self.COLORS)]
+
     def _transform(self, y: np.ndarray) -> np.ndarray:
         return np.log10(np.maximum(y, 0.0) + 1.0) if self.log_y else y
 
@@ -221,7 +227,7 @@ class PlotWidget(QWidget):
         # données
         painter.setClipRect(area)
         for k, ((_name, _raw), y) in enumerate(zip(self.series, ys, strict=True)):
-            color = QColor(self.COLORS[k % len(self.COLORS)])
+            color = QColor(self._color(k))
             ok = np.isfinite(y) & np.isfinite(self.x)
             xs_px, ys_px = to_x(self.x[ok]), to_y(y[ok])
             if self.spec.kind == "barres":
@@ -248,6 +254,6 @@ class PlotWidget(QWidget):
         painter.setClipping(False)
         if len(self.series) > 1:  # légende
             for k, (name, _) in enumerate(self.series):
-                painter.setPen(QColor(self.COLORS[k % len(self.COLORS)]))
+                painter.setPen(QColor(self._color(k)))
                 painter.drawText(QPointF(area.left() + 8 + 70 * k, area.top() + 14), str(name))
         painter.end()

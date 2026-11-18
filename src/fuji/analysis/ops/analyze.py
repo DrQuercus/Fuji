@@ -26,6 +26,25 @@ def _plane(image: Image) -> np.ndarray:
     return plane
 
 
+_Channel = Literal["luminosité", "rouge", "vert", "bleu", "les trois couleurs"]
+_CHANNELS = (("Rouge", "#f05252"), ("Vert", "#2fbf71"), ("Bleu", "#4f8cff"))
+_CHANNEL_HELP = "image couleur : la luminosité (comme ImageJ), un canal, ou les trois courbes"
+
+
+def _channel_planes(image: Image, channel: str) -> list[tuple[str, str, np.ndarray]]:
+    """Les plans à mesurer selon le canal choisi : (nom, couleur de la courbe, valeurs).
+
+    Une image en niveaux de gris n'a qu'un plan, quel que soit le choix."""
+    if not image.is_rgb or channel == "luminosité":
+        return [("", "", _plane(image))]
+    if image.data.ndim != 3:
+        raise ValueError("Cette mesure demande une image 2D (un plan)")
+    planes = [(name, color, image.data[..., i]) for i, (name, color) in enumerate(_CHANNELS)]
+    if channel == "les trois couleurs":
+        return planes
+    return [planes[("rouge", "vert", "bleu").index(channel)]]
+
+
 # ------------------------------------------------------------------------ profils
 def sample_line(plane: np.ndarray, start: np.ndarray, end: np.ndarray, width: float = 1.0) -> np.ndarray:
     """Valeurs le long d'un segment (``ImageProcessor.getLine`` d'ImageJ).
@@ -84,29 +103,50 @@ def plot_profile(
         float,
         Param(label="largeur de ligne", min=1, max=500, unit="px", description="moyenne sur cette largeur"),
     ] = 1.0,
+    channel: Annotated[_Channel, Param(label="canal", description=_CHANNEL_HELP)] = "luminosité",
+    smooth: Annotated[
+        int,
+        Param(
+            label="lissage",
+            min=0,
+            max=201,
+            unit="px",
+            description="moyenne glissante le long du profil, pour un tracé moins bruité (0 : aucun)",
+        ),
+    ] = 0,
 ) -> Table:
     """Intensité le long d'une ligne (ou d'un tracé), ou moyenne verticale d'un rectangle.
 
-    Un tableau et un graphique par opération ; s'il y a plusieurs ROI, une colonne par ROI."""
+    Un tableau et un graphique par opération ; s'il y a plusieurs ROI, une colonne par ROI.
+    Sur une image couleur, « les trois couleurs » trace une courbe par canal."""
     if not len(roi):
         raise ValueError(
             "Dessinez d'abord une ligne ou un rectangle sur l'image (outils « Dessiner », en haut du panneau)"
         )
-    plane = _plane(image)
-    profiles = [roi_profile(plane, roi, i, width) for i in range(len(roi))]
-    n = max(len(p) for p in profiles)
+    planes = _channel_planes(image, channel)
+    series: list[tuple[str, str, np.ndarray]] = []
+    for i in range(len(roi)):
+        for cname, color, plane in planes:
+            profile = roi_profile(plane, roi, i, width)
+            if smooth > 1:
+                profile = ndi.uniform_filter1d(profile.astype(np.float64), int(smooth), mode="nearest")
+            if len(roi) == 1:
+                name = cname or "Valeur"
+            else:
+                name = f"ROI {i + 1}" + (f" {cname.lower()}" if cname else "")
+            series.append((name, color if len(roi) == 1 else "", profile))
+    n = max(len(p) for _, _, p in series)
     data = {"Distance": np.arange(n) * image.px}
-    names = []
-    for i, p in enumerate(profiles):
-        name = "Valeur" if len(profiles) == 1 else f"ROI {i + 1}"
-        names.append(name)
+    for name, _, p in series:
         data[name] = np.concatenate([p, np.full(n - len(p), np.nan)])
     df = pd.DataFrame(data, index=pd.RangeIndex(1, n + 1))
+    names = tuple(name for name, _, _ in series)
+    colors = tuple(color for _, color, _ in series) if all(c for _, c, _ in series) else ()
     return Table(
         df,
         name=f"Profil — {image.name}",
         units={"Distance": image.unit},
-        plot=Plot("Distance", tuple(names), "ligne", f"Distance ({image.unit})", "Intensité"),
+        plot=Plot("Distance", names, "ligne", f"Distance ({image.unit})", "Intensité", colors),
     )
 
 
@@ -136,40 +176,90 @@ def histogram(
         int,
         Param(label="classes", min=2, max=65536, description="pour les images 16 et 32 bits (8 bits : 256)"),
     ] = 256,
+    channel: Annotated[_Channel, Param(label="canal", description=_CHANNEL_HELP)] = "luminosité",
+    lower: Annotated[
+        float,
+        Param(
+            label="valeur minimale",
+            min=-1e9,
+            span="image",
+            description="ne compter que les valeurs à partir de celle-ci (0 et 0 : toutes les valeurs)",
+        ),
+    ] = 0.0,
+    upper: Annotated[
+        float,
+        Param(
+            label="valeur maximale",
+            min=-1e9,
+            span="image",
+            description="ne compter que les valeurs jusqu'à celle-ci (0 et 0 : toutes les valeurs)",
+        ),
+    ] = 0.0,
 ) -> Table:
-    """Répartition des valeurs de l'image (ou de la zone des ROI), avec ses statistiques."""
-    plane = _plane(image)
-    sel = _roi_selection(roi, plane.shape)
-    values = plane[sel] if sel is not None else plane.ravel()
-    values = values[np.isfinite(values)] if values.dtype.kind == "f" else values
-    if values.size == 0:
-        raise ValueError("Aucun pixel à compter")
-    if values.dtype == np.uint8:
-        counts = np.bincount(values, minlength=256)
-        centres, width = np.arange(256, dtype=np.float64), 1.0
+    """Répartition des valeurs de l'image (ou de la zone des ROI), avec ses statistiques.
+
+    Sur une image couleur, « les trois couleurs » donne une courbe par canal. Une plage de
+    valeurs (minimum, maximum) permet de regarder de près une partie de l'histogramme."""
+    planes = _channel_planes(image, channel)
+    sel = _roi_selection(roi, planes[0][2].shape)
+    limited = upper > lower
+    selected = []
+    for cname, color, plane in planes:
+        values = plane[sel] if sel is not None else plane.ravel()
+        values = values[np.isfinite(values)] if values.dtype.kind == "f" else values
+        if limited:
+            values = values[(values >= lower) & (values <= upper)]
+        selected.append((cname, color, values))
+    if any(v.size == 0 for _, _, v in selected):
+        raise ValueError("Aucun pixel à compter" + (" entre ces deux valeurs" if limited else ""))
+    first = selected[0][2]
+    if first.dtype == np.uint8:
+        lo, hi = (int(math.ceil(lower)), int(math.floor(upper))) if limited else (0, 255)
+        lo, hi = max(lo, 0), min(hi, 255)
+        columns = [np.bincount(v, minlength=256)[lo : hi + 1] for _, _, v in selected]
+        centres, width = np.arange(lo, hi + 1, dtype=np.float64), 1.0
     else:
-        lo, hi = float(values.min()), float(values.max())
+        if limited:
+            lo, hi = float(lower), float(upper)
+        else:
+            lo = min(float(v.min()) for _, _, v in selected)
+            hi = max(float(v.max()) for _, _, v in selected)
         if hi <= lo:
             hi = lo + 1.0
-        counts, edges = np.histogram(values, bins=bins, range=(lo, hi))
+        edges = np.linspace(lo, hi, bins + 1)
+        columns = [np.histogram(v, bins=bins, range=(lo, hi))[0] for _, _, v in selected]
         width = (hi - lo) / bins
         centres = edges[:-1]
-    stats = intensity_stats(values)
-    df = pd.DataFrame({"Valeur": centres, "Nombre": counts}, index=pd.RangeIndex(1, len(counts) + 1))
-    summary = {
-        "N": int(values.size),
-        "Mean": stats["Mean"],
-        "StdDev": stats["StdDev"],
-        "Min": stats["Min"],
-        "Max": stats["Max"],
-        "Mode": stats["Mode"],
-        "Largeur de classe": width,
-    }
+    names = [cname or "Nombre" for cname, _, _ in selected]
+    data = {"Valeur": centres, **dict(zip(names, columns, strict=True))}
+    df = pd.DataFrame(data, index=pd.RangeIndex(1, len(centres) + 1))
+    stats = intensity_stats(first)
+    if len(selected) == 1:
+        summary = {
+            "N": int(first.size),
+            "Mean": stats["Mean"],
+            "StdDev": stats["StdDev"],
+            "Min": stats["Min"],
+            "Max": stats["Max"],
+            "Mode": stats["Mode"],
+            "Largeur de classe": width,
+        }
+    else:
+        summary = {"N": int(first.size), "Largeur de classe": width}
+        summary.update({f"Mean {cname.lower()}": float(v.mean()) for cname, _, v in selected})
+    colors = tuple(color for _, color, _ in selected) if all(c for _, c, _ in selected) else ()
     return Table(
         df,
         name=f"Histogramme — {image.name}",
         summary=summary,
-        plot=Plot("Valeur", ("Nombre",), "barres", "Valeur", "Nombre de pixels"),
+        plot=Plot(
+            "Valeur",
+            tuple(names),
+            "barres" if len(names) == 1 else "ligne",
+            "Valeur",
+            "Nombre de pixels",
+            colors,
+        ),
     )
 
 
