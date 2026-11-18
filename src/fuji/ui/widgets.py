@@ -143,7 +143,10 @@ class PlotWidget(QWidget):
         self.setMinimumSize(280, 170)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setToolTip("Double-clic : échelle verticale linéaire / logarithmique")
-        ThemeManager.get().changed.connect(lambda *_: self.update())
+        ThemeManager.get().changed.connect(self._on_theme)  # méthode : coupée avec le widget
+
+    def _on_theme(self, *_: object) -> None:
+        self.update()
 
     def mouseDoubleClickEvent(self, _event: object) -> None:
         self.log_y = not self.log_y

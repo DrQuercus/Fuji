@@ -976,9 +976,12 @@ class AnalysisPanel(QWidget):
         ou points."""
         self._add_layer(item, (0.0, 0.0), prefix, doc)
 
-    def run_operation(self, name: str, inputs: dict[str, str] | None = None) -> None:
+    def run_operation(
+        self, name: str, inputs: dict[str, str] | None = None, params: dict[str, Any] | None = None
+    ) -> None:
         """Ouvre une opération, choisit ses entrées (nom de l'entrée → nom du calque, quand le
-        calque existe) et l'exécute : les raccourcis « Mesurer », « Histogramme »…"""
+        calque existe), pose les réglages donnés et l'exécute : les raccourcis « Mesurer »,
+        « Histogramme », « Appliquer le contraste aux pixels »…"""
         if self.preview.isChecked():
             self.preview.setChecked(False)
         self.select_operation(name)
@@ -986,6 +989,8 @@ class AnalysisPanel(QWidget):
             combo = self._inputs.get(key)
             if combo is not None and combo.findText(layer_name) >= 0:
                 combo.setCurrentText(layer_name)
+        if params:
+            self._params.set_values(params)
         self._run()
 
     def _open_in_fiji(self) -> None:

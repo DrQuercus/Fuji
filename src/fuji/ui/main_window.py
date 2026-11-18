@@ -64,7 +64,7 @@ from .components import PanelHeader, icon_button
 from .compose_panel import ComposePanel
 from .config.editor import ConfigEditor
 from .config.wizard import NewMicroscopeDialog
-from .display_bar import DisplayBar
+from .display_bar import DisplayBar, scale_bar_of
 from .gallery import GalleryPanel
 from .live import LIVE_LAYER, LiveController, contrast_for, units_for
 from .panels.acquisition_panel import AcquisitionPanel
@@ -108,11 +108,7 @@ _MEMMAP_BYTES = 1 << 30
 _CHANNEL_COLORMAPS = ("green", "magenta", "cyan", "yellow", "red", "blue")
 
 
-def _scale_bar(viewer: ViewerModel) -> Any:
-    """La barre d'échelle (son emplacement a changé avec napari 0.9)."""
-    overlays = getattr(getattr(viewer, "canvas", None), "overlays", None)
-    bar = getattr(overlays, "scale_bar", None)
-    return bar if bar is not None else viewer.scale_bar
+_scale_bar = scale_bar_of
 
 
 def _scroll(widget: QWidget) -> QScrollArea:
@@ -267,8 +263,11 @@ class MainWindow(QMainWindow):
         self.canvas_layout = pages[0]  # la barre rapide s'y ajoute (espace Microscope)
         self.quickbar: QuickBar | None = None
         # espace Analyse : histogramme et contraste de l'image affichée, toujours sous l'image
-        self.display_bar = DisplayBar(self.viewer)
+        self.display_bar = DisplayBar(
+            self.viewer, scale_bars=[_scale_bar(self.viewer), _scale_bar(self.scope_viewer)]
+        )
         self.display_bar.message.connect(self.notify)
+        self.display_bar.apply_requested.connect(self._apply_display)
         self.display_bar.close_requested.connect(lambda: self.close_image())
         self.display_bar.document_chosen.connect(self.show_document)
         pages[1].addWidget(self.display_bar)
@@ -1506,6 +1505,24 @@ class MainWindow(QMainWindow):
             return
         self.sidebar.select("analysis")
         self.analysis.run_operation(name, {"image": layer.name, "image1": layer.name, "roi": ROI_LAYER})
+
+    def _apply_display(self, name: str, black: float, white: float, gamma: float) -> None:
+        """« Appliquer le contraste aux pixels » : une nouvelle image, telle qu'on la voit."""
+        if name not in self.viewer.layers:
+            return
+        self.set_mode("analyse", "analysis")
+        self.analysis.run_operation(
+            "Niveaux",
+            {"image": name},
+            {
+                "black": black,
+                "white": white,
+                "gamma": min(max(gamma, 0.1), 10.0),
+                "channel": "tous",
+                "out_black": 0.0,
+                "out_white": 100.0,
+            },
+        )
 
     def quick_measure(self) -> None:
         """« Mesurer » d'ImageJ : les ROI dessinées s'il y en a, sinon l'image entière."""
