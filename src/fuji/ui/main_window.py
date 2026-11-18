@@ -33,6 +33,7 @@ from qtpy.QtCore import Qt, Signal
 from qtpy.QtGui import QAction, QKeySequence
 from qtpy.QtWidgets import (
     QApplication,
+    QCheckBox,
     QDockWidget,
     QFileDialog,
     QHBoxLayout,
@@ -77,8 +78,8 @@ from .panels.settings_panel import SettingsPanel
 from .prefs import settings
 from .qt_bridge import QtManualActionHandler
 from .quickbar import QuickBar
+from .results import ResultsWidget, accumulate
 from .theme import ThemeManager, napari_theme_id, palette
-from .widgets import ResultsWidget
 
 log = logging.getLogger(__name__)
 
@@ -328,6 +329,14 @@ class MainWindow(QMainWindow):
         self.results_tabs = QTabWidget()
         self.results_tabs.setTabsClosable(True)
         self.results_tabs.tabCloseRequested.connect(self._close_results_tab)
+        self.accumulate_box = QCheckBox("Cumuler")
+        self.accumulate_box.setToolTip(
+            "Ajouter les nouvelles mesures à la suite du tableau du même genre, au lieu d'ouvrir "
+            "un onglet à chaque fois : un seul tableau pour toute une série d'images"
+        )
+        self.accumulate_box.setChecked(self.settings.value("results/accumulate", False, type=bool))
+        self.accumulate_box.toggled.connect(lambda on: self.settings.setValue("results/accumulate", on))
+        self.results_tabs.setCornerWidget(self.accumulate_box, Qt.Corner.TopRightCorner)
         self.results_dock = QDockWidget("Résultats", self)
         self.results_dock.setObjectName("dock_results")
         self.results_dock.setWidget(self.results_tabs)
@@ -1585,9 +1594,26 @@ class MainWindow(QMainWindow):
         self.notify(f"Échelle de « {layer.name} » : {px:.4f} µm/pixel")
 
     def show_table(self, table: Table) -> None:
-        self.results_tabs.addTab(ResultsWidget(table), table.name[:30])
-        self.results_tabs.setCurrentIndex(self.results_tabs.count() - 1)
-        self.results_dock.show()
+        """Montre un tableau de résultats : dans un nouvel onglet, ou — avec « Cumuler » — à
+        la suite du dernier tableau du même genre (mesures d'une série d'images)."""
+        tabs = self.results_tabs
+        if self.accumulate_box.isChecked():
+            for index in reversed(range(tabs.count())):
+                widget = tabs.widget(index)
+                merged = accumulate(widget.table, table)
+                if merged is not None:
+                    widget.set_table(merged)
+                    tabs.setTabText(index, merged.name[:30])
+                    tabs.setCurrentIndex(index)
+                    self.results_dock.show()
+                    return
+        tabs.addTab(ResultsWidget(table), table.name[:30])
+        tabs.setCurrentIndex(tabs.count() - 1)
+        if self.results_dock.isHidden():
+            self.results_dock.show()
+            # à l'ouverture, les résultats prennent un bon tiers de la hauteur : l'image garde le reste
+            height = max(280, min(360, self.height() * 2 // 5))
+            self.resizeDocks([self.results_dock], [height], Qt.Orientation.Vertical)
 
     # ================================================================ divers
     def show_hardware_info(self) -> None:

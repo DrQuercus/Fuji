@@ -6,6 +6,7 @@ si l'image est calibrée, en pixels² sinon (comme « Set Scale » dans ImageJ).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -334,12 +335,29 @@ class Table:
     #: graphique à afficher avec le tableau (profil, histogramme...)
     plot: Plot | None = None
 
-    def to_csv(self, path: str | Path) -> Path:
-        path = Path(path)
-        df = self.data.copy()
+    def frame(self, columns: Sequence[str] | None = None) -> pd.DataFrame:
+        """Les données prêtes à sortir de Fuji : colonnes choisies (toutes par défaut), dans
+        l'ordre du tableau, avec l'unité dans le titre — « Area (µm²) »."""
+        keep = [c for c in self.data.columns if columns is None or str(c) in set(columns)]
+        df = self.data[keep].copy()
         df.columns = [f"{c} ({self.units[c]})" if self.units.get(c) else c for c in df.columns]
+        return df
+
+    def to_csv(
+        self,
+        path: str | Path,
+        *,
+        columns: Sequence[str] | None = None,
+        decimal: str = ".",
+        sep: str | None = None,
+    ) -> Path:
+        """Écrit le tableau dans un fichier CSV. Avec la virgule décimale (``decimal=","``,
+        pour Excel en français), les colonnes sont séparées par des points-virgules."""
+        path = Path(path)
+        if sep is None:
+            sep = ";" if decimal == "," else ","
         # « utf-8-sig » : Excel reconnaît l'encodage et affiche correctement « µm² »
-        df.to_csv(path, index_label=" ", encoding="utf-8-sig")
+        self.frame(columns).to_csv(path, index_label=" ", encoding="utf-8-sig", sep=sep, decimal=decimal)
         return path
 
     def __len__(self) -> int:

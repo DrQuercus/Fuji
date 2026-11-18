@@ -6,21 +6,17 @@ from typing import Any
 
 import numpy as np
 from qtpy.QtCore import QPointF, QRectF, Qt
-from qtpy.QtGui import QColor, QGuiApplication, QPainter, QPainterPath, QPen
+from qtpy.QtGui import QColor, QPainter, QPainterPath, QPen
 from qtpy.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
-    QFileDialog,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QPushButton,
     QSizePolicy,
     QSpinBox,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -255,69 +251,3 @@ class PlotWidget(QWidget):
                 painter.setPen(QColor(self.COLORS[k % len(self.COLORS)]))
                 painter.drawText(QPointF(area.left() + 8 + 70 * k, area.top() + 14), str(name))
         painter.end()
-
-
-#: Au-delà, seules les premières lignes sont affichées (l'export contient tout).
-MAX_ROWS_SHOWN = 2000
-
-
-class ResultsWidget(QWidget):
-    """Tableau de résultats (comme « Results » dans ImageJ), exportable."""
-
-    def __init__(self, table: Table, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.table = table
-        lay = QVBoxLayout(self)
-        df = table.data
-        summary = "  ·  ".join(f"{k} : {_fmt(v)}" for k, v in table.summary.items())
-        title = QLabel(f"<b>{table.name}</b> — {len(df)} ligne(s)")
-        lay.addWidget(title)
-        if summary:
-            lay.addWidget(hint_label(summary))
-        self.plot: PlotWidget | None = None
-        if table.plot is not None and len(df):
-            self.plot = PlotWidget(table)
-            lay.addWidget(self.plot, 2)
-        shown = min(len(df), MAX_ROWS_SHOWN)
-        if shown < len(df):
-            lay.addWidget(hint_label(f"{shown} premières lignes affichées ; l'export les contient toutes."))
-        df = df.iloc[:shown]
-        grid = QTableWidget(len(df), len(df.columns))
-        headers = [f"{c}\n({table.units[c]})" if table.units.get(c) else str(c) for c in df.columns]
-        grid.setHorizontalHeaderLabels(headers)
-        grid.setVerticalHeaderLabels([str(i) for i in df.index])
-        for r, (_, rec) in enumerate(df.iterrows()):
-            for c, v in enumerate(rec.tolist()):
-                item = QTableWidgetItem(_fmt(v))
-                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                grid.setItem(r, c, item)
-        grid.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        grid.resizeColumnsToContents()
-        lay.addWidget(grid, 1)
-        export = QPushButton("Exporter en CSV…")
-        export.clicked.connect(self._export)
-        copy = QPushButton("Copier (pour Excel)")
-        copy.clicked.connect(self._copy)
-        buttons = [export, copy]
-        if self.plot is not None:
-            image = QPushButton("Enregistrer le graphique…")
-            image.clicked.connect(self._save_plot)
-            buttons.append(image)
-        lay.addWidget(row(*buttons))
-
-    def _save_plot(self) -> None:
-        if self.plot is None:
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Enregistrer le graphique", "graphique.png", "PNG (*.png)"
-        )
-        if path:
-            self.plot.grab().save(path)
-
-    def _export(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(self, "Exporter les résultats", "resultats.csv", "CSV (*.csv)")
-        if path:
-            self.table.to_csv(path)
-
-    def _copy(self) -> None:
-        QGuiApplication.clipboard().setText(self.table.data.to_csv(sep="\t"))
