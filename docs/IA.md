@@ -126,7 +126,7 @@ des moteurs, garde la main près du bouton Stop et règle `z_max_um` dans le pro
 | Moteurs | `move_stage`, `center_on_point`, `move_focus`, `autofocus`, `stop_motion`, `home_stage`, `set_origin` |
 | Réglage du microscope | `focus_score`, `check_illumination`, `check_field_diaphragm`, `calibrate_pixel_size`, `calibrate_stage`, `measure_backlash` |
 | Acquisition | `acquire` (temps, pile Z, canaux, positions, mosaïque, autofocus), `acquisition_status`, `cancel_acquisition` |
-| Analyse | `list_operations`, `describe_operation`, `run_operation` : les 76 opérations de la section Analyse (les fonctions essentielles d'ImageJ) |
+| Analyse | `list_operations`, `describe_operation`, `run_operation` : les 80 opérations de la section Analyse (les fonctions essentielles d'ImageJ) |
 
 L'IA reçoit aussi un mode d'emploi (unités, précautions avant de mesurer), l'état du
 microscope et son profil, et deux scénarios prêts à l'emploi : « Première image » et

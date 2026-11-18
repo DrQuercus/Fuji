@@ -12,8 +12,8 @@ voisinages, conversions de type, définitions des mesures).
 | Dans ImageJ | Dans Fuji |
 |---|---|
 | Menus Process / Analyze / Image | les outils rangés **par tâche** (« Améliorer l'image », « Isoler les objets », « Compter et mesurer »…), dans le panneau **Outils** et dans le menu **Analyse** ; chaque fiche indique la commande ImageJ correspondante |
-| Barre d'outils : rectangle, ovale, polygone, ligne, points | les mêmes outils, en haut du panneau **Outils** (« Dessiner : ») |
-| ROI Manager | le calque « ROI » : chaque forme est une région, modifiable et supprimable |
+| Barre d'outils : rectangle, ovale, polygone, main levée, ligne, ligne brisée, angle, points | les mêmes outils, en haut du panneau **Outils** (« Dessiner : ») ; la longueur, la surface ou l'angle s'affiche à côté de la forme pendant qu'on la dessine (dans ImageJ : la barre d'état) |
+| ROI Manager (Labels, Properties) | le calque « ROI » : chaque forme est une région numérotée, modifiable et supprimable ; couleur, épaisseur et remplissage dans les réglages du dessin (roue dentée) |
 | `M` (Measure) | **Analyse → Mesurer** (`Ctrl+M` ; sur Mac `⌘⇧M`) : les ROI dessinées, sinon l'image entière |
 | `H` (Histogram) | **Analyse → Histogramme** (`Ctrl+H` ; sur Mac `⌘⇧H`) |
 | `K` (Plot Profile) | **Analyse → Profil d'intensité** (`Ctrl+Maj+K`) sur la ligne tracée |
@@ -23,8 +23,10 @@ voisinages, conversions de type, définitions des mesures).
 | Command Finder (`L`) | la recherche du panneau : elle comprend aussi les noms anglais d'ImageJ (« threshold », « z project »…), sans tenir compte des accents |
 | Fenêtres d'images, File → Close (`Ctrl+W`) | une image affichée à la fois ; **Fermer** sous l'image (`Ctrl+W`) ; clic droit → « Ouvrir à côté » dans la liste pour en garder plusieurs, à choisir sous l'image |
 | Flatten + Scale Bar | **Fichier → Exporter la vue (PNG)** : image, ROI et barre d'échelle |
-| Results | le volet **Résultats** : tableau, graphique, export CSV, copie vers Excel |
-| Brightness/Contrast (Auto, Reset), LUT | la **barre d'affichage** sous l'image : histogramme et bornes à la souris, min / max, **Auto** (0,35 % saturés), **Tout**, gamma, couleur ; comme dans ImageJ tant qu'on ne clique pas sur « Apply », seules les couleurs affichées changent |
+| Results, Set Measurements, Summarize, Distribution | le volet **Résultats** : tableau trié d'un clic, **Colonnes** au choix, décimales, **Statistiques** par colonne, **Distribution** d'une colonne, export CSV, copie vers Excel (virgule décimale au besoin) ; « **Cumuler** » garde un seul tableau pour une série d'images, comme la fenêtre Results |
+| Brightness/Contrast (Auto, Reset, Apply), LUT, Invert LUT | la **barre d'affichage** sous l'image : histogramme et bornes à la souris, min / max, **Auto** (0,35 % saturés, réglable), **Tout**, curseurs luminosité / contraste / gamma, couleur, **Inverser** ; seules les couleurs affichées changent, sauf avec « Appliquer le contraste aux pixels » (roue dentée), qui crée une nouvelle image |
+| Zoom (`+`, `-`, View 100 %, Original Scale) | **− / + / 100 % / Ajuster** dans la barre d'affichage ; molette de la souris |
+| Analyze → Tools → Scale Bar | roue dentée de la barre d'affichage → **Barre d'échelle** (position, couleur, taille, longueur) |
 | Canaux, opacité, mélange | les réglages du calque (section **Calques**) |
 
 Les mesures sont en µm dès que l'image est calibrée (les captures de Fuji le sont toujours).
@@ -192,6 +194,15 @@ Cas particuliers connus :
 | Projection | Image > Stacks > Z Project... | identique |
 | Recaler la pile | Plugins > Registration > StackReg (Translation) | équivalent |
 | Sous-pile | Image > Stacks > Tools > Make Substack... / Reduce... | identique |
+
+### Réglages
+
+| Fuji | ImageJ | Fidélité |
+|---|---|---|
+| Balance des couleurs | Image > Adjust > Color Balance... | équivalent |
+| Niveaux | Image > Adjust > Brightness/Contrast... (Apply) | équivalent |
+| Réduire le bruit | Process > Noise / Filters | propre à Fuji |
+| Réglages de l'image | — | propre à Fuji |
 
 ### ROI
 

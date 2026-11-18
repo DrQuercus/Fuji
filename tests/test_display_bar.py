@@ -76,7 +76,8 @@ def test_brightness_contrast_and_zoom_in_the_bar(window, qtbot):
     # zoom : 100 % = un pixel de l'image pour un pixel de l'écran, quelle que soit l'échelle
     window.set_pixel_size(layer, 0.5)
     bar.set_zoom(100)
-    assert window.viewer.camera.zoom == pytest.approx(2.0) and bar.zoom_btn.text() == "100 %"
+    ratio = bar.devicePixelRatioF()  # 2 sur un écran Retina : deux pixels d'écran par point
+    assert window.viewer.camera.zoom == pytest.approx(2.0 / ratio) and bar.zoom_btn.text() == "100 %"
     bar.zoom_in_btn.click()
     assert bar.zoom_percent() == pytest.approx(125) and bar.zoom_btn.text() == "125 %"
     bar.zoom_out_btn.click()

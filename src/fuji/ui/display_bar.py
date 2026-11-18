@@ -840,6 +840,19 @@ class DisplayBar(QWidget):
                 pass
         self.viewer.reset_view()
 
+    def is_fitted(self) -> bool:
+        """L'image est-elle ajustée à la fenêtre (ni zoomée, ni déplacée) ?"""
+        camera = self.viewer.camera
+        zoom, center = float(camera.zoom), tuple(camera.center)
+        try:
+            self.zoom_fit()
+            fitted = abs(float(camera.zoom) - zoom) <= 0.03 * zoom and bool(
+                np.allclose(camera.center, center, atol=2.0 / max(zoom, 1e-9))
+            )
+        finally:
+            camera.zoom, camera.center = zoom, center
+        return fitted
+
     def _sync_zoom(self, *_: Any) -> None:
         percent = self.zoom_percent()
         text = f"{percent:.0f} %" if percent >= 10 else f"{percent:.1f} %".replace(".", ",")

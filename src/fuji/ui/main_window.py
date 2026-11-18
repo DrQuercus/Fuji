@@ -29,7 +29,7 @@ from typing import Any
 import numpy as np
 from napari.components import ViewerModel
 from napari.qt import QtViewer
-from qtpy.QtCore import Qt, Signal
+from qtpy.QtCore import Qt, QTimer, Signal
 from qtpy.QtGui import QAction, QKeySequence
 from qtpy.QtWidgets import (
     QApplication,
@@ -1610,10 +1610,14 @@ class MainWindow(QMainWindow):
         tabs.addTab(ResultsWidget(table), table.name[:30])
         tabs.setCurrentIndex(tabs.count() - 1)
         if self.results_dock.isHidden():
+            # à l'ouverture, les résultats prennent un tiers de la hauteur (plus avec un graphique) ;
+            # l'image, si elle était ajustée à la fenêtre, se réajuste à la place qui reste
+            refit = self.mode == "analyse" and self.display_bar.is_fitted()
             self.results_dock.show()
-            # à l'ouverture, les résultats prennent un bon tiers de la hauteur : l'image garde le reste
-            height = max(280, min(360, self.height() * 2 // 5))
+            height = max(240, min(330 if table.plot is not None else 290, self.height() // 3))
             self.resizeDocks([self.results_dock], [height], Qt.Orientation.Vertical)
+            if refit:
+                QTimer.singleShot(60, self.display_bar.zoom_fit)
 
     # ================================================================ divers
     def show_hardware_info(self) -> None:

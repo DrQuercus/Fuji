@@ -4,7 +4,7 @@ Logiciel de microscopie qui réunit le meilleur de **Micro-Manager** (piloter le
 matériel), **napari** (afficher les images) et **Fiji/ImageJ** (analyser), dans une
 interface propre qui s'adapte au microscope.
 
-> Projet en développement (version 0.9). Voir
+> Projet en développement (version 1.0). Voir
 > [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) et [docs/FEUILLE_DE_ROUTE.md](docs/FEUILLE_DE_ROUTE.md).
 
 ![Interface de Fuji : espace Microscope, live sur le microscope simulé](docs/interface.png)
@@ -19,9 +19,9 @@ d'image pour ne pas mélanger prise de vue et analyse :
   Assistants, de l'Acquisition, de la liste des Images ou de la configuration. Sous
   l'image, l'**histogramme en direct** (alerte de saturation).
 - **Analyse** : la liste des **Images** reste ouverte à gauche ; sous l'image, la
-  **barre d'affichage** (histogramme, contraste, gamma, couleur) ; à droite, les
-  **outils** et les calques ; en bas, les résultats. Le live s'y met en pause et reprend
-  au retour.
+  **barre d'affichage** (zoom, histogramme, contraste, luminosité, gamma, couleur) ; à
+  droite, les **outils** et les calques ; en bas, les résultats. Le live s'y met en pause
+  et reprend au retour.
 
 Chaque panneau se replie : bouton de sa section dans la barre de gauche (Contrôle,
 Images), ou Ctrl+Shift+B à gauche et Ctrl+B à droite. Contrôle replié, la barre sous
@@ -61,12 +61,45 @@ compter des spots, préparer une figure, colocalisation, projection d'une pile Z
 
 ![Démarche guidée : compter des cellules, étape du seuillage avec l'aperçu](docs/demarche.png)
 
-La **barre d'affichage**, toujours sous l'image, règle ce que l'on voit sans toucher aux
-pixels : histogramme du plan affiché (on tire les bornes à la souris), min / max,
-**Auto** (comme ImageJ), **Tout**, gamma et couleur (gris, vert, magenta, chaleur…). Les
-mesures utilisent toujours les vraies valeurs.
+### Des réglages partout
 
-![Espace Analyse : mesure d'une ROI](docs/analyse.png)
+Chaque fiche d'outil a de **vrais réglages** : un curseur et un champ pour chaque nombre,
+une ligne qui dit ce que fait le réglage, l'équivalent en µm des tailles en pixels, les
+réglages avancés repliés dans la fiche, « Valeurs par défaut », et les derniers réglages
+utilisés retenus pour la fois suivante. L'**aperçu en direct** se compare à l'original
+(bouton « Voir l'original », opacité de l'aperçu).
+
+![Fiche d'un outil : curseurs, explications et aperçu en direct](docs/reglages.png)
+
+Quatre outils de retouche, comme dans un logiciel de photo : **Réglages de l'image**
+(luminosité, contraste, gamma, saturation, teinte, température, netteté, bruit),
+**Niveaux**, **Balance des couleurs** et **Réduire le bruit**. Les seuillages nettoient le
+masque dans la foulée (lisser avant, remplir les trous, retirer les petits objets) ; le
+profil et l'histogramme se tracent par canal (rouge, vert, bleu, ou les trois courbes).
+
+La **barre d'affichage**, toujours sous l'image, règle ce que l'on voit sans toucher aux
+pixels : **zoom** (−, +, 100 %, ajuster), histogramme du plan affiché (on tire les bornes à
+la souris), min / max, **Auto**, **Tout** ; et, dépliables, **luminosité**, **contraste**,
+gamma, couleur (et son négatif), transparence des **masques**. La roue dentée ouvre les
+options : part de pixels saturés d'« Auto », lissage de l'image agrandie, **barre
+d'échelle** (position, couleur, taille, longueur) et « appliquer le contraste aux pixels ».
+Les mesures utilisent toujours les vraies valeurs.
+
+Sur l'image, on **dessine** rectangles, ellipses, polygones, contours à main levée, lignes,
+trajets, angles et points. Chaque forme porte son **numéro** et sa **mesure** (longueur,
+surface, angle), mise à jour pendant qu'on la dessine ; couleur, épaisseur, remplissage et
+taille du texte se règlent (roue dentée de la rangée « Dessiner »). Le trait garde son
+épaisseur à l'écran, même sur une image 4K vue en entier.
+
+![Espace Analyse : formes mesurées sur l'image et tableau des mesures](docs/analyse.png)
+
+Le **tableau de résultats** se règle aussi : colonnes à montrer, décimales, virgule décimale
+pour Excel en français, tri d'un clic sur un titre, **statistiques** de chaque colonne
+(moyenne, écart type, médiane, min, max, somme), **distribution** d'une colonne en
+graphique, et « **Cumuler** » pour réunir les mesures d'une série d'images dans un seul
+tableau.
+
+![Résultats : distribution des surfaces, tableau et statistiques](docs/resultats.png)
 
 ## Configurer un microscope
 
@@ -111,10 +144,10 @@ simulé, vide, copie de l'actuel). L'éditeur couvre **tout** le profil :
 - **Image de référence** (champ plat) : sur une zone vide de la lame, « Prendre la
   référence » ; le fond devient uniforme dès le live — coins sombres et poussières
   disparaissent des captures, des panoramas et des acquisitions.
-- **L'essentiel d'ImageJ, intégré** : 76 opérations recodées avec les formules d'ImageJ —
+- **L'essentiel d'ImageJ, intégré** : 80 opérations (175 réglages), recodées avec les formules d'ImageJ —
   types d'image, filtres, soustraction de fond, calculs entre images, les 17 seuillages
   automatiques et les seuillages locaux, binaire, piles (projection, montage, recalage),
-  ROI (rectangle, ellipse, polygone, ligne), mesures, profils, histogrammes, maxima,
+  ROI (rectangle, ellipse, polygone, main levée, ligne, trajet, angle), mesures, profils, histogrammes, maxima,
   analyse de particules, colocalisation, déconvolution des colorants (H&E, DAB...).
   Aperçu en direct, traitement de toute une pile, résultats en µm. Voir
   [la correspondance avec ImageJ](docs/IMAGEJ.md).
@@ -268,7 +301,7 @@ profils fournis.
 ## État de validation
 
 Le code a été entièrement relu et chaque défaut corrigé est couvert par un test
-(environ 290 tests, lancés à chaque modification sous Linux **et sur macOS**). L'application
+(environ 340 tests, lancés à chaque modification sous Linux **et sur macOS**). L'application
 Mac est construite puis essayée automatiquement sur des Mac de GitHub (processeurs Apple
 et Intel) avant d'être proposée au téléchargement.
 

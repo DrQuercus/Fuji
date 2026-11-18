@@ -19,9 +19,11 @@ from qtpy.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFileDialog,
+    QHBoxLayout,
     QLabel,
     QMenu,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QTableWidget,
@@ -204,9 +206,14 @@ class ResultsWidget(QWidget):
         lay = QVBoxLayout(self)
         lay.setSpacing(6)
         self.title = QLabel()
-        self.summary = hint_label()
-        lay.addWidget(self.title)
-        lay.addWidget(self.summary)
+        self.summary = hint_label()  # sur la ligne du titre : le tableau garde la hauteur
+        self.summary.setWordWrap(False)
+        self.summary.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        head = QHBoxLayout()
+        head.setSpacing(14)
+        head.addWidget(self.title)
+        head.addWidget(self.summary, 1)
+        lay.addLayout(head)
 
         # ---- réglages ----------------------------------------------------------------
         bar = QWidget()
@@ -245,11 +252,13 @@ class ResultsWidget(QWidget):
         self.bins.setToolTip("Nombre de barres de la distribution (auto : d'après le nombre de valeurs)")
         self.bins.setKeyboardTracking(False)
         self.bins.valueChanged.connect(self._graph_changed)
-        self.copy_btn = QPushButton("Copier (pour Excel)")
+        self.copy_btn = QPushButton("Copier")
+        self.copy_btn.setToolTip("Copie le tableau : il se colle tel quel dans Excel ou un autre tableur")
         self.copy_btn.clicked.connect(self._copy)
-        self.export_btn = QPushButton("Exporter en CSV…")
+        self.export_btn = QPushButton("Exporter (CSV)…")
         self.export_btn.clicked.connect(self._export)
-        self.save_plot_btn = QPushButton("Enregistrer le graphique…")
+        self.save_plot_btn = QPushButton("Image du graphique…")
+        self.save_plot_btn.setToolTip("Enregistre le graphique affiché dans un fichier PNG")
         self.save_plot_btn.clicked.connect(self._save_plot)
         for w in (
             self.columns_btn,
@@ -314,7 +323,7 @@ class ResultsWidget(QWidget):
         self.title.setText(f"<b>{table.name}</b> — {len(df)} ligne(s)")
         summary = "  ·  ".join(f"{k} : {_fmt(v)}" for k, v in table.summary.items())
         self.summary.setText(summary)
-        self.summary.setVisible(bool(summary))
+        self.summary.setToolTip(summary)
         shown = min(len(df), MAX_ROWS_SHOWN)
         self.note.setText(
             f"{shown} premières lignes affichées ; l'export les contient toutes." if shown < len(df) else ""

@@ -100,9 +100,11 @@ def widget(qtbot, tmp_path):
     if sys.platform.startswith("linux") and not os.environ.get("DISPLAY"):
         pytest.skip("pas d'affichage (lancer avec xvfb-run)")
     from fuji.ui.app import isolate_settings
+    from fuji.ui.prefs import settings
     from fuji.ui.results import ResultsWidget
 
     isolate_settings(str(tmp_path))
+    settings().setValue("results/decimal_comma", False)  # d'origine : d'après la langue du système
     w = ResultsWidget(_table())
     qtbot.addWidget(w)
     return w

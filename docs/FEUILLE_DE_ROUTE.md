@@ -204,6 +204,40 @@ pratiques, et l'image de référence fonctionnait mal ; ceux du logiciel ToupTek
       français (« rayon du flou », « tolérance »…) ; messages d'erreur qui disent quoi faire ;
       vouvoiement partout ; sur Mac, Mesurer et Histogramme ne prennent plus ⌘M et ⌘H
 
+## Version 1.0 (fait) — des réglages partout dans l'analyse
+
+Retour d'essai : l'outil d'analyse « manquait terriblement de réglages ». État avant : 76
+outils dont 24 sans aucun réglage, 129 réglages en tout, saisis dans de simples cases de
+nombres ; un affichage limité à min / max, gamma et couleur ; un tableau de résultats figé ;
+des ROI sans aucun réglage.
+
+- [x] **Fiches d'outils** : pour chaque nombre un curseur et un champ, une ligne d'explication,
+      l'équivalent en µm ; réglages avancés repliés dans la fiche (plus besoin du mode
+      expert) ; « Valeurs par défaut » ; derniers réglages retenus ; bornes des curseurs
+      d'après l'image (seuils, niveaux) ; aperçu comparable à l'original
+- [x] **Quatre outils de retouche** : Réglages de l'image (luminosité, contraste, gamma,
+      saturation, teinte, température, dominante, netteté, bruit), Niveaux, Balance des
+      couleurs, Réduire le bruit (5 méthodes)
+- [x] **Options ajoutées** aux outils existants : seuillages (lisser avant, remplir les trous,
+      retirer les petits objets), contours (Sobel, Scharr, Prewitt, Laplacien, Canny), balance
+      des blancs (force, cible), profil et histogramme (canal, plage, lissage), accentuation
+      (force), lissage (passes), soustraction de fond (voir le fond estimé). Sans y toucher,
+      le résultat reste celui d'ImageJ. 80 outils, 175 réglages
+- [x] **Barre d'affichage** plus compacte et plus complète : zoom, luminosité, contraste,
+      négatif, transparence et contours des masques, part de pixels saturés d'« Auto »,
+      lissage à l'écran, barre d'échelle (position, couleur, taille, longueur, fond),
+      « appliquer le contraste aux pixels »
+- [x] **Tableau de résultats** : colonnes au choix, décimales, virgule décimale, tri,
+      statistiques par colonne, distribution d'une colonne, « Cumuler » une série d'images
+- [x] **Dessin** : couleur, épaisseur (constante à l'écran), remplissage, taille des points ;
+      numéros et mesures affichés sur l'image, en direct ; main levée, trajet, angle,
+      modification des sommets ; couleur automatique selon le fond (clair ou sombre)
+- [x] Corrigé au passage : erreur au changement de thème après la fermeture d'un tableau
+      avec graphique ; l'image se réajuste quand le volet des résultats s'ouvre
+
+Limite connue : la mesure affichée à côté d'une forme est celle de son tracé ; le tableau
+compte les pixels entiers. Les deux peuvent différer d'une fraction de pour cent.
+
 ## Prochaines étapes
 
 ### 1. Valider sur ton matériel (priorité)

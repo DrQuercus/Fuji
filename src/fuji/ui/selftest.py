@@ -158,7 +158,62 @@ def run(report: str | None = None, screenshot: str | None = None) -> int:
         count = len(table.data)
         if count < 5:
             raise RuntimeError(f"seulement {count} objets trouvés sur la lame simulée")
+        state["table"] = table
         return f"{count} objets mesurés"
+
+    def analysis_settings() -> str:
+        """Les réglages de l'espace Analyse : affichage, dessin mesuré, tableau de résultats."""
+        import numpy as np
+
+        from fuji.analysis import Image
+        from fuji.analysis import run as run_operation
+
+        win = state["win"]
+        bar, panel = win.display_bar, win.analysis
+        layer = win.viewer.layers[state["capture"].name]
+        # affichage : zoom, luminosité / contraste, barre d'échelle
+        bar.set_zoom(100)
+        bar.full_contrast()
+        bar.contrast.setValue(30)
+        lo, hi = (float(v) for v in layer.contrast_limits)
+        bar.contrast_label.click()
+        if not (hi - lo) < float(layer.contrast_limits[1]) - float(layer.contrast_limits[0]):
+            raise RuntimeError("le curseur de contraste ne resserre pas les bornes")
+        bar.set_scale_bar(color="white")
+        bar.set_scale_bar(color="auto")
+        bar.zoom_fit()
+        # dessin : une région et une ligne, avec leur mesure à côté
+        panel.set_tool("shapes", "add_rectangle")
+        roi = win.viewer.layers["ROI"]
+        roi.add_rectangles(np.array([[20, 20], [20, 120], [90, 120], [90, 20]], float))
+        roi.add_lines(np.array([[10, 10], [70, 90]], float))
+        panel.set_tool("", "pan_zoom")
+        panel.drawing.refresh()
+        labels = [str(t) for t in roi.text.values]
+        if len(labels) != 2 or "µm²" not in labels[0] or not labels[1].endswith("µm"):
+            raise RuntimeError(f"mesures non affichées sur les formes : {labels}")
+        for _ in range(10):  # le texte se dessine sur l'image
+            state["app"].processEvents()
+            time.sleep(0.02)
+        panel.clear_rois()
+        # un outil de retouche, puis le tableau de résultats et ses réglages
+        image = Image.from_frame(state["frame"])
+        tuned = run_operation("Réglages de l'image", image, contrast=20.0, saturation=15.0, sharpness=20.0)
+        if tuned.data.shape != image.data.shape:
+            raise RuntimeError("« Réglages de l'image » change la taille de l'image")
+        tabs = win.results_tabs
+        win.show_table(state["table"])
+        widget = tabs.widget(tabs.count() - 1)
+        widget.stats_box.setChecked(True)
+        widget.show_distribution("Area")
+        widget.plot.grab()
+        mean = float(widget.statistics().loc["Moyenne", "Area"])
+        widget.stats_box.setChecked(False)
+        win._close_results_tab(tabs.count() - 1)
+        win.results_dock.hide()
+        return (
+            f"zoom, contraste, barre d'échelle ; formes : {' | '.join(labels)} ; surface moyenne {mean:.1f}"
+        )
 
     def files() -> str:
         import numpy as np
@@ -277,7 +332,8 @@ def run(report: str | None = None, screenshot: str | None = None) -> int:
         step("live", live)
         if step("capture", capture) is not None:
             step("ouverture dans Analyse", open_in_analysis)
-            step("analyse", analysis)
+            if step("analyse", analysis) is not None:
+                step("réglages de l'analyse", analysis_settings)
             step("enregistrement", files)
         step("affichage", display)
         if "absent" not in versions.get("mcp", "absent"):

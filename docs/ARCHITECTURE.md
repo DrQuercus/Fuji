@@ -76,9 +76,11 @@
 | `core/compose.py` | Images composées en direct : profondeur de champ étendue (`FocusStacker`), panorama à la main (`LiveMosaic`) |
 | `io/captures.py` | Images prises : enregistrement automatique par jour, vignettes, résumés |
 | `ui/gallery.py` | Liste « Images », commune aux espaces Microscope et Analyse |
-| `ui/display_bar.py` | Barre d'affichage de l'espace Analyse : image affichée (choisir, fermer), histogramme, contraste, gamma, couleur |
+| `ui/display_bar.py` | Barre d'affichage de l'espace Analyse : image affichée (choisir, fermer), zoom, histogramme, contraste, luminosité, gamma, couleur, masques, barre d'échelle |
+| `ui/results.py` | Tableau de résultats : colonnes, décimales, tri, statistiques, distribution, cumul d'une série |
+| `ui/drawing.py` | Style des ROI et des points, numéros et mesures affichés sur l'image |
 | `ui/documents.py` | Images ouvertes dans Analyse : chaque image et ses résultats s'ouvrent, s'affichent et se ferment d'un bloc |
-| `ui/panels/analysis_panel.py`, `ui/panels/tool_menu.py` | Panneau « Outils » : menus par tâche, fiche de chaque outil, démarches guidées |
+| `ui/panels/analysis_panel.py`, `ui/panels/tool_menu.py`, `ui/panels/param_form.py` | Panneau « Outils » : menus par tâche, fiche de chaque outil, formulaire des réglages (curseurs, défauts, mémoire), démarches guidées |
 | `analysis/guide.py` | Mode d'emploi des outils : menus, résumés, « quand l'utiliser », démarches |
 | `ui/compose_panel.py` | Compositions en direct dans la section Acquisition (calcul dans un fil de travail) |
 | `ui/flow.py`, `ui/prefs.py` | Disposition qui passe à la ligne (petits écrans) ; préférences (isolables pour les tests) |
