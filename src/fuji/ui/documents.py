@@ -21,6 +21,17 @@ from napari.layers import Image as ImageLayer
 DOC_KEY = "fuji_document"
 SOURCE_KEY = "fuji_source"
 PREVIEW_PREFIX = "Aperçu — "
+#: les deux calques de dessin, retrouvés par leur nom (qui ne se change donc pas)
+ROI_LAYER = "ROI"
+POINTS_LAYER = "Points"
+
+
+def camera_of(viewer: ViewerModel) -> Any:
+    """La caméra d'une vue (zoom, centre). Son emplacement a changé avec napari 0.9 :
+    ``viewer.scene.camera`` ; l'ancien ``viewer.camera`` avertit à chaque lecture."""
+    scene = getattr(viewer, "scene", None)
+    camera = getattr(scene, "camera", None)
+    return camera if camera is not None else viewer.camera
 
 
 def tag(layer: Any, doc: str | None, *, source: bool = False) -> None:

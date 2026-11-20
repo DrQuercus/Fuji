@@ -23,6 +23,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from fuji.text import number
+
 from .devices import FocusDrive, LightSource, StateDevice, XYStage
 
 log = logging.getLogger(__name__)
@@ -119,9 +121,9 @@ class ManualFocusDrive(_ManualMixin, FocusDrive):
         dz = z - self._z
         if abs(dz) > 1e-6:
             sens = "vers le haut" if dz > 0 else "vers le bas"
-            msg = f"Tournez la mise au point fine de {abs(dz):.2f} µm {sens}"
+            msg = f"Tournez la mise au point fine de {number(abs(dz), 2)} µm {sens}"
             if self.um_per_division:
-                msg += f" (≈ {abs(dz) / self.um_per_division:.1f} graduations)"
+                msg += f" (≈ {number(abs(dz) / self.um_per_division, 1)} graduations)"
             self._ask(msg + ".")
         self._z = z
 
@@ -142,7 +144,7 @@ class ManualXYStage(_ManualMixin, XYStage):
 
     def _move_to(self, x: float, y: float) -> None:
         if (x, y) != self._xy:
-            self._ask(f"Déplacez la platine vers X = {x:.1f} µm, Y = {y:.1f} µm.")
+            self._ask(f"Déplacez la platine vers X = {number(x, 1)} µm, Y = {number(y, 1)} µm.")
         self._xy = (x, y)
 
     def declare_position(self, x: float, y: float) -> None:

@@ -38,7 +38,8 @@ from qtpy.QtWidgets import (
 )
 
 from . import documents
-from .components import button, icon_button, label, section_title
+from .components import button, icon_button, label, section_title, shortcut
+from .documents import camera_of
 from .flow import FlowLayout
 from .prefs import settings
 from .theme import ThemeManager, palette
@@ -67,7 +68,7 @@ ZOOM_STEP = 1.25
 _CONTRAST_BASE = 100.0  # curseur « contraste » à 100 : fenêtre 100 fois plus étroite que l'image
 _INVERTED = " (inversé)"  # fin du nom d'une palette à l'envers
 _CONTOUR = 2  # épaisseur du contour des masques (pixels)
-_LEVELS_WIDTH = 330  # largeur souhaitée du bloc histogramme + bornes
+_LEVELS_WIDTH = 300  # largeur souhaitée du bloc histogramme + bornes
 _ROOMY = 600  # largeur à partir de laquelle les curseurs sont dépliés d'office
 
 #: barre d'échelle : réglages par défaut, puis les choix proposés (texte, valeur)
@@ -77,7 +78,7 @@ SCALE_BAR_DEFAULTS: dict[str, Any] = {
     "color": "auto",
     "font_size": 10.0,
     "length": 0.0,  # 0 : longueur choisie automatiquement
-    "box": True,
+    "box": True,  # fond sombre sous la barre : lisible sur une image claire comme sur le fond noir
     "ticks": True,
 }
 SCALE_BAR_POSITIONS = (
@@ -146,6 +147,8 @@ class ContrastHistogram(QWidget):
         self._range = (0.0, 1.0)
         self._limits = (0.0, 1.0)
         self._drag: int | None = None  # 0 : borne basse, 1 : borne haute
+        self._drag_span: tuple[float, float] | None = None  # plage figée le temps d'un glisser
+        self._press_x: float | None = None
         self._stats = ""
         self.setToolTip(
             "Histogramme du plan affiché. Tirez les traits pour régler le contraste ; "
@@ -179,7 +182,11 @@ class ContrastHistogram(QWidget):
         self.update()
 
     def _span(self) -> tuple[float, float]:
-        """Plage affichée : celle des pixels, élargie aux bornes si elles en sortent."""
+        """Plage affichée : celle des pixels, élargie aux bornes si elles en sortent. Figée
+        pendant un glisser : recalculée à chaque mouvement, une borne tirée hors du cadre
+        élargissait la plage qui servait à la placer, et s'emballait."""
+        if self._drag_span is not None:
+            return self._drag_span
         lo = min(self._range[0], self._limits[0])
         hi = max(self._range[1], self._limits[1])
         return (lo, hi if hi > lo else lo + 1)
@@ -207,19 +214,27 @@ class ContrastHistogram(QWidget):
             return
         x = event.position().x()
         d = [abs(x - self._x_of(v)) for v in self._limits]
+        # la borne ne bouge qu'au premier mouvement : un double-clic (échelle lin / log) ou un
+        # simple clic ne la déplace pas
+        self._drag_span = self._span()
         self._drag = int(np.argmin(d))
-        self._move_to(x)
+        self._press_x = x
 
     def mouseMoveEvent(self, event: Any) -> None:
         x = event.position().x()
         if self._drag is not None:
-            self._move_to(x)
+            if self._press_x is not None and abs(x - self._press_x) < 2:
+                return
+            self._press_x = None
+            r = self._plot_rect()
+            self._move_to(min(max(x, r.left()), r.right()))  # hors du cadre : la borne reste au bord
             return
         near = self._hists and min(abs(x - self._x_of(v)) for v in self._limits) < 6
         self.setCursor(Qt.CursorShape.SizeHorCursor if near else Qt.CursorShape.ArrowCursor)
 
     def mouseReleaseEvent(self, _event: Any) -> None:
-        self._drag = None
+        self._drag = self._drag_span = self._press_x = None
+        self.update()
 
     def _move_to(self, x: float) -> None:
         value = self._value_of(x)
@@ -461,11 +476,15 @@ class DisplayBar(QWidget):
         self.layer: ImageLayer | None = None
         self._plane: np.ndarray | None = None
         self._data_range = (0.0, 1.0)
+        #: bornes du contraste de chaque image à son ouverture (clé : identité du calque)
+        self._origins: dict[int, tuple[float, float]] = {}
         self._syncing = False
         self._driving = ""  # le curseur que l'on est en train de tirer n'est pas resynchronisé
         self._scale_bars = list(scale_bars) if scale_bars is not None else [scale_bar_of(viewer)]
+        #: pour chaque autre vue (le live), de quoi savoir si elle montre une image
+        self.other_views: list[ViewerModel] = []
         prefs = settings()
-        self.auto_saturation = _pref(prefs, "display/auto_saturation", AUTO_SATURATION)
+        self.auto_saturation = min(max(_pref(prefs, "display/auto_saturation", AUTO_SATURATION), 0.0), 25.0)
         self.smooth = _pref(prefs, "display/smooth", False)
         self._more_chosen = prefs.contains("display/more")
         lay = FlowLayout(self, spacing=16, line_spacing=8)
@@ -486,7 +505,9 @@ class DisplayBar(QWidget):
             lambda i: self.document_chosen.emit(self.doc_combo.itemData(i) or "")
         )
         self.doc_combo.hide()
-        self.close_btn = button("Fermer", "close", tooltip="Fermer cette image et ses résultats (Ctrl+W)")
+        self.close_btn = button(
+            "Fermer", "close", tooltip=f"Fermer cette image et ses résultats ({shortcut('Ctrl+W')})"
+        )
         self.close_btn.setObjectName("ghost")
         self.close_btn.clicked.connect(self.close_requested.emit)
         name_row = QHBoxLayout()
@@ -518,7 +539,6 @@ class DisplayBar(QWidget):
         self.more_btn = icon_button(
             "sliders",
             "Réglages : luminosité, contraste, gamma, couleur, masque (replier / déplier)",
-            object_name="toggle",
             checkable=True,
         )
         self.more_btn.setChecked(_pref(prefs, "display/more", True))
@@ -526,7 +546,6 @@ class DisplayBar(QWidget):
         self.options_btn = icon_button(
             "gear", "Options d'affichage : contraste automatique, lissage, barre d'échelle…"
         )
-        self.options_btn.setStyleSheet("QPushButton::menu-indicator { image: none; width: 0px; }")
         for b in (self.more_btn, self.options_btn):
             b.setFixedWidth(34)
         self.view_row = QWidget()
@@ -539,7 +558,7 @@ class DisplayBar(QWidget):
         vl.addWidget(self.more_btn)
         vl.addWidget(self.options_btn)
         il.addWidget(self.view_row)
-        info.setMinimumWidth(236)
+        info.setMinimumWidth(228)
         info.setMaximumWidth(270)
         lay.addWidget(info)
 
@@ -555,7 +574,7 @@ class DisplayBar(QWidget):
             box.setRange(-1e12, 1e12)
             box.setKeyboardTracking(False)
             box.setToolTip(tip)
-            box.setMinimumWidth(66)
+            box.setMinimumWidth(44)  # le style ajoute ses marges : 66 pixels à l'écran
             box.setMaximumWidth(92)
             box.valueChanged.connect(self._boxes_changed)
         self.auto_btn = button("Auto")
@@ -587,12 +606,12 @@ class DisplayBar(QWidget):
         self.brightness = _slider(
             -100, 100, "Luminosité : déplace les bornes du contraste, sans changer leur écart"
         )
-        self.brightness_label = _value_button("0", "Revenir à 0 (fenêtre centrée sur les valeurs de l'image)")
+        self.brightness_label = _value_button("0", "Revenir à 0 (la luminosité de l'image à son ouverture)")
         self.brightness.valueChanged.connect(self._brightness_changed)
         self.brightness.sliderReleased.connect(self._released)
         self.brightness_label.clicked.connect(lambda: self._reset_slider(self.brightness))
         self.contrast = _slider(-100, 100, "Contraste : resserre (à droite) ou écarte (à gauche) les bornes")
-        self.contrast_label = _value_button("0", "Revenir à 0 (du pixel le plus sombre au plus clair)")
+        self.contrast_label = _value_button("0", "Revenir à 0 (le contraste de l'image à son ouverture)")
         self.contrast.valueChanged.connect(self._contrast_changed)
         self.contrast.sliderReleased.connect(self._released)
         self.contrast_label.clicked.connect(lambda: self._reset_slider(self.contrast))
@@ -645,11 +664,15 @@ class DisplayBar(QWidget):
         self._layers_timer.setSingleShot(True)
         self._layers_timer.setInterval(0)
         self._layers_timer.timeout.connect(self._retarget)
+        self._origin_timer = QTimer(self)  # bornes d'origine notées une fois l'image ouverte
+        self._origin_timer.setSingleShot(True)
+        self._origin_timer.setInterval(0)
+        self._origin_timer.timeout.connect(self._note_origin)
         viewer.layers.selection.events.active.connect(self._retarget)
         viewer.layers.events.inserted.connect(self._inserted)
         viewer.layers.events.removed.connect(self._retarget)
         viewer.dims.events.current_step.connect(lambda *_: self._timer.start())
-        viewer.camera.events.zoom.connect(self._sync_zoom)
+        camera_of(viewer).events.zoom.connect(self._sync_zoom)
         for bar in self._scale_bars:
             apply_scale_bar(bar)
         self._sync_auto_tip()
@@ -758,6 +781,14 @@ class DisplayBar(QWidget):
             except Exception:  # calque sans ce réglage
                 pass
 
+    def sync_scale_bars(self, *_: Any) -> None:
+        """Pas de barre d'échelle sur une vue vide : elle n'aurait rien à mesurer (un « 75 »
+        sans unité sur un fond noir)."""
+        visible = bool(scale_bar_prefs()["visible"])
+        self._scale_bars[0].visible = visible and self.layer is not None
+        for bar, view in zip(self._scale_bars[1:], self.other_views, strict=False):
+            bar.visible = visible and len(view.layers) > 0
+
     def set_scale_bar(self, **changes: Any) -> None:
         """Change des réglages de la barre d'échelle (retenus, appliqués aux deux espaces)."""
         s = settings()
@@ -768,6 +799,7 @@ class DisplayBar(QWidget):
         p = scale_bar_prefs()
         for bar in self._scale_bars:
             apply_scale_bar(bar, p)
+        self.sync_scale_bars()
         for key, act in self.scale_actions.items():
             if act.isChecked() != bool(p[key]):
                 act.blockSignals(True)
@@ -795,11 +827,35 @@ class DisplayBar(QWidget):
         if ok:
             self.set_scale_bar(length=float(value))
 
+    def _origin(self) -> tuple[float, float]:
+        """Les bornes de l'image telle qu'elle a été ouverte : c'est le zéro des curseurs
+        « luminosité » et « contraste », et l'état où ramène « l'affichage d'origine »."""
+        layer = self.layer
+        if layer is None:
+            return self._data_range
+        origin = self._origins.get(id(layer))
+        if origin is None:
+            lo, hi = (float(v) for v in layer.contrast_limits)
+            return (lo, hi) if hi > lo else self._data_range
+        return origin
+
+    def _note_origin(self) -> None:
+        """Retient les bornes d'origine de l'image affichée (une fois son ouverture finie, ou
+        au premier geste sur un curseur), et oublie celles des images fermées."""
+        alive = {id(ly) for ly in self.viewer.layers}
+        self._origins = {key: value for key, value in self._origins.items() if key in alive}
+        layer = self.layer
+        if layer is not None and id(layer) not in self._origins:
+            lo, hi = (float(v) for v in layer.contrast_limits)
+            if hi > lo:
+                self._origins[id(layer)] = (lo, hi)
+        self._sync_faders()
+
     def reset_display(self) -> None:
-        """Du pixel le plus sombre au plus clair, gamma à 1, palette à l'endroit."""
+        """L'image comme à son ouverture : bornes d'origine, gamma à 1, palette à l'endroit."""
         if self.layer is None:
             return
-        self.full_contrast()
+        self._set_limits(*self._origin())
         self.layer.gamma = 1.0
         if self.invert.isChecked():
             self.invert.setChecked(False)
@@ -821,11 +877,11 @@ class DisplayBar(QWidget):
 
     def zoom_percent(self) -> float:
         """Pixels de l'écran par pixel de l'image, en pour cent."""
-        return float(self.viewer.camera.zoom) * self._unit() * self.devicePixelRatioF() * 100
+        return float(camera_of(self.viewer).zoom) * self._unit() * self.devicePixelRatioF() * 100
 
     def set_zoom(self, percent: float) -> None:
         percent = min(max(float(percent), 1.0), 6400.0)
-        self.viewer.camera.zoom = percent / 100 / (self._unit() * self.devicePixelRatioF())
+        camera_of(self.viewer).zoom = percent / 100 / (self._unit() * self.devicePixelRatioF())
 
     def zoom_by(self, factor: float) -> None:
         self.set_zoom(self.zoom_percent() * factor)
@@ -842,7 +898,7 @@ class DisplayBar(QWidget):
 
     def is_fitted(self) -> bool:
         """L'image est-elle ajustée à la fenêtre (ni zoomée, ni déplacée) ?"""
-        camera = self.viewer.camera
+        camera = camera_of(self.viewer)
         zoom, center = float(camera.zoom), tuple(camera.center)
         try:
             self.zoom_fit()
@@ -906,6 +962,7 @@ class DisplayBar(QWidget):
         if layer is not None:
             for name, cb in self._callbacks():
                 getattr(layer.events, name).connect(cb)
+            self._origin_timer.start()
         self._refresh_all()
 
     def _callbacks(self) -> list[tuple[str, Any]]:
@@ -916,19 +973,30 @@ class DisplayBar(QWidget):
             ("data", self._data_changed),
             ("name", self._sync_info),
             ("scale", self._sync_zoom),
+            ("scale", self._sync_info),  # « sans échelle » disparaît dès l'étalonnage
         ]
 
     def _data_changed(self, *_: Any) -> None:
         self._timer.start()
 
     # -------------------------------------------------------------- affichage
+    def resizeEvent(self, event: Any) -> None:
+        super().resizeEvent(event)
+        self._follow_width()
+
     def showEvent(self, event: Any) -> None:
         super().showEvent(event)
-        if not self._more_chosen and self.width() > 0:
-            # premier affichage : curseurs dépliés si la fenêtre a la place, repliés sinon
-            self._more_chosen = True
+        self._follow_width()
+
+    def _follow_width(self) -> None:
+        """Tant que l'on n'a pas choisi soi-même (bouton « Réglages »), les curseurs se déplient
+        quand la barre a la place et se replient quand la fenêtre est étroite."""
+        if self._more_chosen or self.width() <= 0 or not self.isVisible():
+            return
+        roomy = self.width() >= _ROOMY
+        if self.more_btn.isChecked() != roomy:
             self.more_btn.blockSignals(True)
-            self.more_btn.setChecked(self.width() >= _ROOMY)
+            self.more_btn.setChecked(roomy)
             self.more_btn.blockSignals(False)
             self._update_visibility()
 
@@ -948,6 +1016,8 @@ class DisplayBar(QWidget):
         self.mask_group.setVisible(more and self._mask() is not None)
 
     def _refresh_all(self) -> None:
+        # sans image, pas de barre d'échelle : elle n'aurait rien à mesurer
+        self.sync_scale_bars()
         self._update_visibility()
         self._sync_info()
         self._refresh_plane()
@@ -1008,6 +1078,9 @@ class DisplayBar(QWidget):
         except Exception:  # calque en cours de changement : on réessaiera
             return
         self._plane = _sample(plane, bool(layer.rgb))
+        if layer.rgb and self._plane.ndim == 3 and self._plane.shape[-1] > 3:
+            # PNG avec transparence : la couche alpha (255 partout) faussait l'histogramme et « Auto »
+            self._plane = self._plane[..., :3]
         self._data_range = full_limits(self._plane)
         self.histogram.set_data(self._plane, rgb=bool(layer.rgb) and self._plane.ndim == 3)
         self._sync_faders()
@@ -1021,7 +1094,7 @@ class DisplayBar(QWidget):
             lo, hi = (float(v) for v in layer.contrast_limits)
             integer = np.issubdtype(np.dtype(layer.data.dtype), np.integer)
             for box in (self.min_box, self.max_box):
-                box.setDecimals(0 if integer else 3)
+                box.setDecimals(0 if integer else _float_decimals(*self._data_range))
                 box.setSingleStep(1 if integer else max((hi - lo) / 100, 1e-6))
             self.min_box.setValue(lo)
             self.max_box.setValue(hi)
@@ -1049,7 +1122,7 @@ class DisplayBar(QWidget):
         if self.layer is None:
             return
         lo, hi = (float(v) for v in self.layer.contrast_limits)
-        b, c = window_to_sliders(lo, hi, self._data_range)
+        b, c = window_to_sliders(lo, hi, self._origin())
         self._syncing = True
         try:
             if self._driving != "brightness":
@@ -1065,9 +1138,13 @@ class DisplayBar(QWidget):
     def _set_limits(self, lo: float, hi: float) -> None:
         if self.layer is None or hi <= lo:
             return
-        lo_r, hi_r = self.layer.contrast_limits_range
-        if lo < lo_r or hi > hi_r:  # sinon napari ramène les bornes dans la plage
-            self.layer.contrast_limits_range = (min(lo, lo_r), max(hi, hi_r))
+        # la plage permise suit les bornes : trop étroite, napari les y ramène ; restée immense
+        # après un contraste poussé au minimum, elle rend son propre curseur inutilisable
+        lo_r, hi_r = (float(v) for v in self.layer.contrast_limits_range)
+        d_lo, d_hi = self._data_range
+        wanted = (min(lo, d_lo), max(hi, d_hi))
+        if lo < lo_r or hi > hi_r or (hi_r - lo_r) > 4 * (wanted[1] - wanted[0]):
+            self.layer.contrast_limits_range = wanted
         self.layer.contrast_limits = (lo, hi)
 
     def _boxes_changed(self, *_: Any) -> None:
@@ -1100,15 +1177,19 @@ class DisplayBar(QWidget):
     def _brightness_changed(self, value: int) -> None:
         if self._syncing or self.layer is None:
             return
+        if id(self.layer) not in self._origins:
+            self._note_origin()
         lo, hi = (float(v) for v in self.layer.contrast_limits)
-        centre = sum(sliders_to_window(value, 0, self._data_range)) / 2
+        centre = sum(sliders_to_window(value, 0, self._origin())) / 2
         self._drive("brightness", centre - (hi - lo) / 2, centre + (hi - lo) / 2)
 
     def _contrast_changed(self, value: int) -> None:
         if self._syncing or self.layer is None:
             return
+        if id(self.layer) not in self._origins:
+            self._note_origin()
         lo, hi = (float(v) for v in self.layer.contrast_limits)
-        w_lo, w_hi = sliders_to_window(0, value, self._data_range)
+        w_lo, w_hi = sliders_to_window(0, value, self._origin())
         centre, half = (lo + hi) / 2, (w_hi - w_lo) / 2
         self._drive("contrast", centre - half, centre + half)
 
@@ -1146,7 +1227,7 @@ class DisplayBar(QWidget):
         """Un nouveau masque prend la transparence et le style choisis pour les précédents."""
         s = settings()
         if s.contains("display/mask_opacity"):
-            layer.opacity = _pref(s, "display/mask_opacity", 70) / 100
+            layer.opacity = min(max(_pref(s, "display/mask_opacity", 70), 0), 100) / 100
         if s.contains("display/mask_contour"):
             layer.contour = _CONTOUR if _pref(s, "display/mask_contour", False) else 0
 
@@ -1170,6 +1251,16 @@ class DisplayBar(QWidget):
         for layer in self._masks():
             layer.opacity = self.mask_opacity.value() / 100
             layer.contour = _CONTOUR if self.mask_contour.isChecked() else 0
+
+
+def _float_decimals(lo: float, hi: float) -> int:
+    """Décimales des champs « noir » et « blanc » d'une image en nombres réels : quatre
+    chiffres utiles sur l'étendue des pixels (trois décimales fixes ne disaient rien d'une
+    image qui va de 0 à 0,002, et trop d'une image qui va de 0 à 60 000)."""
+    span = abs(hi - lo)
+    if not np.isfinite(span) or span <= 0:
+        return 3
+    return int(min(8, max(0, 3 - math.floor(math.log10(span)))))
 
 
 def _pref(store: Any, key: str, default: Any) -> Any:

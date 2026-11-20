@@ -21,6 +21,7 @@ from qtpy.QtWidgets import (
 from superqt.utils import create_worker
 
 from fuji.core.profile import MicroscopeProfile
+from fuji.text import count
 
 from .. import icons
 from ..components import PanelHeader, button, label
@@ -122,7 +123,9 @@ class ConfigEditor(QDialog):
             try:
                 self.pages[self._current].store(self.data)
             except Exception as exc:
-                QMessageBox.warning(self, "Saisie invalide", str(exc))
+                QMessageBox.warning(
+                    self, "Saisie non valable", f"Une valeur de cette page n'est pas valable : {exc}"
+                )
                 self.nav.blockSignals(True)
                 self.nav.setCurrentRow(self._current)
                 self.nav.blockSignals(False)
@@ -154,13 +157,17 @@ class ConfigEditor(QDialog):
         except Exception:
             self.issues.setText("⚠ Une valeur saisie n'est pas valable (détail avec « Vérifier »)")
             return
-        self.issues.setText(f"⚠ {len(issues)} point(s) à vérifier — cliquer pour le détail" if issues else "")
+        self.issues.setText(
+            f"⚠ {count(len(issues), 'point')} à vérifier — cliquer pour le détail" if issues else ""
+        )
 
     def show_issues(self) -> None:
         try:
             profile = self.collect()
         except Exception as exc:
-            QMessageBox.warning(self, "Configuration non valable", str(exc))
+            QMessageBox.warning(
+                self, "Configuration non valable", f"Cette configuration n'est pas valable : {exc}"
+            )
             return
         issues = profile.check()
         if issues:
@@ -173,7 +180,9 @@ class ConfigEditor(QDialog):
         try:
             profile = self.collect()
         except Exception as exc:
-            QMessageBox.warning(self, "Configuration non valable", str(exc))
+            QMessageBox.warning(
+                self, "Configuration non valable", f"Cette configuration n'est pas valable : {exc}"
+            )
             return
 
         def job() -> list[str]:
@@ -212,7 +221,9 @@ class ConfigEditor(QDialog):
         try:
             profile = self.collect()
         except Exception as exc:
-            QMessageBox.warning(self, "Configuration non valable", str(exc))
+            QMessageBox.warning(
+                self, "Configuration non valable", f"Cette configuration n'est pas valable : {exc}"
+            )
             return
         target = M.save_path_for(self.data, self.path)
         target.parent.mkdir(parents=True, exist_ok=True)

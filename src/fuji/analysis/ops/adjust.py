@@ -23,27 +23,67 @@ from ..registry import Param, operation
 _LUMA = np.array([0.299, 0.587, 0.114], dtype=np.float32)
 
 
+#: clé des métadonnées d'une image où l'on peut fixer son « blanc » (le même pour tous les
+#: plans d'une pile, par exemple)
+WHITE_KEY = "white_level"
+
+
 def white_level(data: np.ndarray) -> float:
     """Valeur du « blanc » d'une image : 255 en 8 bits ; en 16 bits, la plus petite
-    profondeur usuelle qui contient les valeurs (4095 pour une caméra 12 bits rangée dans du
-    16 bits) ; 1 ou le maximum pour des nombres réels."""
+    profondeur usuelle qui contient **toutes** les valeurs (4095 pour une caméra 12 bits rangée
+    dans du 16 bits) ; 1 ou le maximum pour des nombres réels. Les NaN ne comptent pas."""
     if data.dtype == np.uint8:
         return 255.0
-    top = float(data[::4, ::4].max()) if data.size else 0.0
+    if not data.size:
+        return 1.0
     if np.issubdtype(data.dtype, np.integer):
+        top = float(data.max())
         for bits in (8, 10, 12, 14, 16):
             if top <= 2**bits - 1:
                 return float(2**bits - 1)
         return float(np.iinfo(data.dtype).max)
+    finite = data[np.isfinite(data)]
+    top = float(finite.max()) if finite.size else 1.0
     return 1.0 if top <= 1.0 else top
+
+
+def white_of(image: Image) -> float:
+    """Le blanc à utiliser pour cette image : celui que l'on a fixé (pile entière), sinon
+    celui que ses valeurs indiquent."""
+    fixed = image.metadata.get(WHITE_KEY)
+    if fixed:
+        return float(fixed)
+    return white_level(image.data[..., :3] if image.is_rgb else image.data)
 
 
 def _unit(image: Image) -> tuple[np.ndarray, float, bool]:
     """Pixels entre 0 et 1 (float32), le blanc d'origine, et « image couleur ? »."""
-    white = white_level(image.data)
+    white = white_of(image)
     rgb = image.is_rgb
     data = image.data[..., :3] if rgb else image.data
     return data.astype(np.float32) / np.float32(white), white, rgb
+
+
+def _untouched(image: Image, suffix: str) -> Image:
+    """Aucun réglage n'est actif : l'image est rendue telle quelle, au pixel près."""
+    return image.with_data(image.data.copy(), name=f"{image.name} ({suffix})")
+
+
+def stretch(image: Image, black: float, white: float, gamma: float = 1.0, invert: bool = False) -> Image:
+    """Écrit dans les pixels ce que montre un affichage réglé entre ``black`` et ``white``
+    avec ce gamma (et, avec ``invert``, une palette à l'envers) : c'est « Apply » de la
+    fenêtre Luminosité / Contraste d'ImageJ. Les bornes sont prises telles quelles (un noir
+    négatif, des bornes non entières sont permis)."""
+    if not white > black:
+        raise ValueError("Le blanc doit être plus clair que le noir")
+    data = image.data[..., :3] if image.is_rgb else image.data
+    full = white_of(image)
+    unit = np.clip((data.astype(np.float32) - np.float32(black)) / np.float32(white - black), 0.0, 1.0)
+    if gamma != 1.0:
+        unit = np.power(unit, np.float32(gamma))
+    if invert:
+        unit = 1.0 - unit
+    return _finish(image, unit, full, "niveaux")
 
 
 def _finish(image: Image, unit: np.ndarray, white: float, suffix: str) -> Image:
@@ -145,6 +185,9 @@ def adjust_image(
     gamma, teinte et saturation, netteté. Les réglages de couleur sont sans effet sur une
     image en niveaux de gris. Le résultat sert à montrer l'image, pas à mesurer des
     intensités."""
+    neutral = not any((brightness, contrast, saturation, hue, temperature, tint, sharpness, denoise))
+    if neutral and gamma == 1.0:
+        return _untouched(image, "réglée")
     unit, white, rgb = _unit(image)
     if denoise > 0:
         unit = _edge_preserving(unit, 0.5 + denoise / 100 * 2.5, 0.02 + denoise / 100 * 0.10)
@@ -244,10 +287,10 @@ def levels(
     les bornes d'affichage est écrit dans les pixels. Le résultat occupe toute la dynamique
     du type de l'image."""
     data = image.data[..., :3] if image.is_rgb else image.data
-    top = white if white > 0 else float(data.max())
+    top = white if white != 0 else float(np.nanmax(data))  # 0 : le maximum de l'image
     if top <= black:
         raise ValueError("Le blanc doit être plus clair que le noir")
-    full = white_level(image.data)
+    full = white_of(image)
     work = data.astype(np.float32)
     index = {"rouge": 0, "vert": 1, "bleu": 2}.get(channel)
     if index is not None and not image.is_rgb:
@@ -287,6 +330,8 @@ def colour_balance(
     pas, ou pour équilibrer les canaux d'une image de fluorescence fusionnée."""
     if not image.is_rgb:
         raise ValueError("La balance des couleurs demande une image couleur")
+    if red == green == blue == 100:
+        return _untouched(image, "couleurs")
     unit, white, _ = _unit(image)
     gains = np.array([red, green, blue], dtype=np.float32) / 100
     if keep_brightness:

@@ -28,8 +28,10 @@ from superqt.utils import create_worker
 from fuji.core.compose import FocusStacker, LiveMosaic
 from fuji.core.frame import is_rgb
 from fuji.core.microscope import Microscope
+from fuji.text import count
 
 from .components import Card, button, hbox, hint, label
+from .documents import camera_of
 from .live import LIVE_LAYER, LiveController, contrast_for, units_for
 
 COMPOSITION_LAYER = "Composition"
@@ -111,7 +113,7 @@ class ComposePanel(QWidget):
         il = QVBoxLayout(idle)
         il.setContentsMargins(0, 0, 0, 0)
         il.setSpacing(6)
-        self.pano_btn = button("Panorama", "mosaic", primary=True)
+        self.pano_btn = button("Panorama", "mosaic")
         self.pano_btn.clicked.connect(lambda: self.start("panorama"))
         il.addWidget(self.pano_btn)
         il.addWidget(
@@ -121,7 +123,7 @@ class ComposePanel(QWidget):
                 "revenez sur une zone déjà assemblée."
             )
         )
-        self.edf_btn = button("Profondeur de champ étendue", "stack", primary=True)
+        self.edf_btn = button("Profondeur de champ étendue", "stack")
         self.edf_btn.clicked.connect(lambda: self.start("edf"))
         il.addWidget(self.edf_btn)
         il.addWidget(
@@ -460,7 +462,7 @@ class ComposePanel(QWidget):
         top, left, bottom, right = rect
         data = np.array([[top, left], [top, right], [bottom, right], [bottom, left]])
         try:  # trait de trois pixels d'écran, quel que soit le zoom
-            width = 3.0 / float(self.viewer.camera.zoom)
+            width = 3.0 / float(camera_of(self.viewer).zoom)
         except Exception:
             pass
         if FIELD_LAYER in self.viewer.layers:
@@ -481,7 +483,7 @@ class ComposePanel(QWidget):
 
     def _show_panorama(self, update: dict[str, Any], px: float) -> None:
         tiles = update.get("tiles", 0)
-        self.detail.setText(f"{tiles} champ(s) dans le panorama")
+        self.detail.setText(f"{count(tiles, 'champ')} dans le panorama")
         self.finish_btn.setEnabled(tiles >= 1)
         self.undo_btn.setEnabled(tiles >= 1)
         canvas = update.get("canvas")
@@ -527,7 +529,7 @@ class ComposePanel(QWidget):
         plus qu'une petite partie."""
         try:
             height, width = self.viewer.canvas.size
-            cam = self.viewer.camera
+            cam = camera_of(self.viewer)
             cy, cx = (float(v) for v in cam.center[-2:])
             zoom = float(cam.zoom)
         except Exception:  # autre version de napari : recadrage simple

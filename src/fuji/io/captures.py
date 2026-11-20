@@ -22,6 +22,7 @@ from typing import Any
 import numpy as np
 
 from fuji.core.frame import is_rgb
+from fuji.text import number
 
 from .ome_tiff import save_image
 
@@ -70,9 +71,8 @@ def describe(metadata: dict[str, Any] | None) -> str:
     md = metadata or {}
     parts = [str(md[k]) for k in ("objective", "channel") if md.get(k)]
     if md.get("exposure_ms"):
-        parts.append(
-            f"{float(md['exposure_ms']):.0f} ms" if md["exposure_ms"] >= 10 else f"{md['exposure_ms']:.1f} ms"
-        )
+        exposure = float(md["exposure_ms"])
+        parts.append(f"{number(exposure, 0 if exposure >= 10 else 1)} ms")
     if md.get("note"):
         parts.append(str(md["note"]))
     return " · ".join(parts)

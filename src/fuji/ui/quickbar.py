@@ -10,6 +10,7 @@ from qtpy.QtCore import Qt, QTimer, Signal
 from qtpy.QtWidgets import QDoubleSpinBox, QHBoxLayout, QLayout, QSizePolicy, QSlider, QVBoxLayout, QWidget
 
 from fuji.core.microscope import Microscope
+from fuji.text import number
 
 from .components import button, choice, section_title
 from .flow import FlowLayout
@@ -111,7 +112,7 @@ class QuickBar(QWidget):
             self._add_setting(lay, _group("Canal", self.channels))
 
         if caps["xy_motorized"] or caps["focus_motorized"]:
-            stop = button("Stop", "stop", tooltip="Arrêt d'urgence : interrompt tous les moteurs")
+            stop = button("Arrêter", "stop", tooltip="Arrêt d'urgence : interrompt tous les moteurs")
             stop.setObjectName("danger")
             stop.clicked.connect(self.stop_motion)
             lay.addWidget(_group("Moteurs", stop))
@@ -227,7 +228,7 @@ def auto_expose_async(microscope: Microscope, message: Any, done: Any, owner: QW
         microscope._auto_exposing = False  # type: ignore[attr-defined]
 
     def returned(value: float) -> None:
-        message(f"Exposition réglée à {value:.1f} ms")
+        message(f"Exposition réglée à {number(value, 1)} ms")
         try:
             done()
         except RuntimeError:  # panneau détruit entre-temps

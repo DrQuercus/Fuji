@@ -5,12 +5,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from qtpy.QtCore import QSettings, QUrl, Signal
+from qtpy.QtCore import QSettings, Qt, QUrl, Signal
 from qtpy.QtGui import QDesktopServices
 from qtpy.QtWidgets import (
     QFileDialog,
     QFormLayout,
-    QHBoxLayout,
     QMessageBox,
     QPushButton,
     QVBoxLayout,
@@ -20,7 +19,8 @@ from superqt.utils import create_worker
 
 from fuji import __version__
 
-from ..components import Card, PathEdit, Segmented, ToggleSwitch, button, hbox, hint, label
+from ..components import Card, PathEdit, Segmented, ToggleSwitch, button, flow, hint, label
+from ..flow import FlowLayout
 from ..prefs import settings
 from ..theme import ACCENTS, FONT_SIZES, ThemeManager
 
@@ -44,14 +44,15 @@ class SettingsPanel(QWidget):
         # apparence
         card = Card("Apparence", icon_name="sun")
         form = QFormLayout()
+        # panneau étroit : le champ passe sous son libellé
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.mode = Segmented(["Sombre", "Clair"])
         self.mode.set_value("Sombre" if mode == "sombre" else "Clair")
         self.mode.selected.connect(lambda v: tm.set(mode=v.lower()))
         form.addRow("Thème", self.mode)
         sl = QWidget()
-        sl_lay = QHBoxLayout(sl)
+        sl_lay = FlowLayout(sl, spacing=6, line_spacing=6)  # les pastilles passent à la ligne
         sl_lay.setContentsMargins(0, 0, 0, 0)
-        sl_lay.setSpacing(6)
         self._accent_buttons: list[QPushButton] = []
         for name, color in ACCENTS.items():
             b = QPushButton()
@@ -59,14 +60,15 @@ class SettingsPanel(QWidget):
             b.setCheckable(True)
             b.setToolTip(name)
             b.setChecked(name == accent)
+            b.setText("✓" if name == accent else "")  # la couleur choisie porte une coche
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setStyleSheet(
-                f"QPushButton#swatch {{ background: {color}; border: 2px solid "
-                "transparent; } QPushButton#swatch:checked { border: 2px solid white; }"
+                f"QPushButton#swatch {{ background: {color}; border: 2px solid {color}; "
+                "color: #ffffff; font-weight: 800; }"
             )
             b.clicked.connect(lambda _=False, n=name: self._accent(n))
             sl_lay.addWidget(b)
             self._accent_buttons.append(b)
-        sl_lay.addStretch(1)
         form.addRow("Couleur d'accent", sl)
         self.size = Segmented(list(FONT_SIZES))
         self.size.set_value(size)
@@ -77,7 +79,7 @@ class SettingsPanel(QWidget):
 
         # interface
         card = Card("Interface", icon_name="sliders")
-        self.expert = ToggleSwitch("Mode expert (tous les réglages avancés)")
+        self.expert = ToggleSwitch("Mode expert (réglages avancés)")
         self.expert.setChecked(s.value("expert", False, type=bool))
         self.expert.toggled.connect(self.expert_changed.emit)
         self.auto_contrast = ToggleSwitch("Contraste automatique du live")
@@ -110,7 +112,7 @@ class SettingsPanel(QWidget):
         test = button("Tester Fiji", "plug")
         test.clicked.connect(self._test_fiji)
         card.add(self.fiji)
-        card.add(test)
+        card.add(flow(test))  # les boutons secondaires gardent leur largeur, calés à gauche
         lay.addWidget(card)
 
         # ToupTek
@@ -121,7 +123,7 @@ class SettingsPanel(QWidget):
         install.clicked.connect(self._install_touptek)
         detect = button("Détecter les caméras", "search")
         detect.clicked.connect(self._refresh_touptek)
-        card.add(hbox(install, detect, spacing=6))
+        card.add(flow(install, detect))
         lay.addWidget(card)
 
         # dossiers
@@ -132,7 +134,7 @@ class SettingsPanel(QWidget):
         card.add(label(f"Données de Fuji : {home}", "faint"))
         opener = button("Ouvrir", "folder")
         opener.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(home))))
-        card.add(opener)
+        card.add(flow(opener))
         lay.addWidget(card)
 
         card = Card(f"Fuji {__version__}", icon_name="info")
@@ -177,7 +179,7 @@ class SettingsPanel(QWidget):
         form.addRow("Port", self.ai_port)
         form.addRow("État", self.ai_status)
         card.add(layout=form)
-        card.add(hbox(copy, stretch=True))
+        card.add(flow(copy))
         self.ai_enabled.toggled.connect(self._ai_toggled)
         self.ai_hardware.toggled.connect(self._ai_hardware_toggled)
         return card
@@ -216,6 +218,7 @@ class SettingsPanel(QWidget):
     def _accent(self, name: str) -> None:
         for b in self._accent_buttons:
             b.setChecked(b.toolTip() == name)
+            b.setText("✓" if b.toolTip() == name else "")
         ThemeManager.get().set(accent=name)
 
     def _auto_contrast(self, on: bool) -> None:
@@ -233,7 +236,7 @@ class SettingsPanel(QWidget):
         self.message.emit("Démarrage de Fiji (Java)…")
         worker = create_worker(ImageJBridge.get().version, _start_thread=False, _ignore_errors=True)
         worker.returned.connect(lambda v: QMessageBox.information(self, "Fiji", f"ImageJ {v} prêt."))
-        worker.errored.connect(lambda e: QMessageBox.warning(self, "Fiji", str(e)))
+        worker.errored.connect(lambda e: QMessageBox.warning(self, "Fiji", f"Fiji n'a pas pu démarrer : {e}"))
         worker.start()
 
     def _refresh_touptek(self, quiet: bool = False) -> None:
@@ -251,7 +254,7 @@ class SettingsPanel(QWidget):
         except Exception as exc:
             self.tp_status.setText(f"Erreur du SDK : {exc}")
             if not quiet:
-                QMessageBox.warning(self, "ToupTek", str(exc))
+                QMessageBox.warning(self, "ToupTek", f"Le SDK ToupTek ne répond pas : {exc}")
 
     def _install_touptek(self) -> None:
         from fuji.drivers.touptek import install_sdk

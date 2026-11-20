@@ -51,7 +51,7 @@ def test_motor_controls_jog_origin_and_emergency_stop(window, qtbot):
     buttons["↑"].click()
     qtbot.waitUntil(lambda: m.xy_stage.get_position() == pytest.approx((250.0, -250.0)), timeout=5000)
     panel.refresh()
-    assert "250.0" in panel.xy_label.text()
+    assert "250,0" in panel.xy_label.text()  # nombres à la française
     buttons["Origine ici"].click()
     assert m.xy_stage.get_position() == pytest.approx((0.0, 0.0))
     panel.z_step.setValue(5)

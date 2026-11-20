@@ -9,7 +9,6 @@ from __future__ import annotations
 from qtpy.QtWidgets import (
     QFormLayout,
     QLabel,
-    QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -17,6 +16,7 @@ from qtpy.QtWidgets import (
 
 from fuji.core.microscope import Microscope
 
+from ..components import button
 from ..widgets import property_editor, section
 
 
@@ -27,7 +27,7 @@ class PropertiesPanel(QWidget):
         self.expert = False
         outer = QVBoxLayout(self)
         outer.setContentsMargins(4, 4, 4, 4)
-        refresh = QPushButton("Actualiser")
+        refresh = button("Actualiser")
         refresh.clicked.connect(self.rebuild)
         outer.addWidget(refresh)
         self._scroll = QScrollArea()

@@ -32,6 +32,7 @@ from fuji.analysis import Image, Labels, Points, Rois, Table, get_operation, lis
 from fuji.core.acquisition import AcquisitionEngine, AcquisitionSummary, AutofocusPlan, plan_acquisition
 from fuji.core.manual import ManualAction, ManualActionDeclined
 from fuji.core.microscope import Microscope
+from fuji.text import count
 
 log = logging.getLogger(__name__)
 
@@ -966,7 +967,7 @@ class MicroscopeController:
             )
         if estimate.manual_actions and not manual_done and self._own_manual:
             raise ManualActionRequired(
-                f"Cette acquisition demandera {estimate.manual_actions} manipulation(s) manuelle(s) "
+                f"Cette acquisition demandera {count(estimate.manual_actions, 'manipulation manuelle')} "
                 "(changements de canal, de mise au point ou de position à la main). Prévenez l'utilisateur ; "
                 "pour lancer quand même, rappelez avec manual_done=true : les consignes seront alors "
                 "considérées comme faites sans attendre. Préférez une séquence sans élément manuel."

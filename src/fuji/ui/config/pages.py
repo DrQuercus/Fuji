@@ -39,6 +39,7 @@ from fuji.core.profile import (
     load_yaml,
 )
 from fuji.drivers import CATEGORIES, driver_info, drivers_info
+from fuji.text import number
 
 from .. import icons
 from ..components import (
@@ -191,9 +192,9 @@ class InstrumentPage(Page):
         card = Card("Statif", icon_name="microscope")
         form = QFormLayout()
         self.manufacturer = QLineEdit()
-        self.manufacturer.setPlaceholderText("Leitz, Zeiss, Nikon, Olympus...")
+        self.manufacturer.setPlaceholderText("Leitz, Zeiss, Nikon, Olympus…")
         self.model = QLineEdit()
-        self.model.setPlaceholderText("Diaplan, Axioskop, Eclipse...")
+        self.model.setPlaceholderText("Diaplan, Axioskop, Eclipse…")
         self.stand = QComboBox()
         self.stand.addItems(STANDS)
         self.tube = QComboBox()
@@ -266,8 +267,8 @@ class InstrumentPage(Page):
                 o.get("immersion", "air"), 1.0
             )
             fov = f"⌀ {fn / mag * 1000:.0f} µm" if fn and mag else "—"
-            res = f"{0.61 * 0.55 / na:.2f} µm" if na else "—"
-            dof = f"{0.55 * n / na**2:.1f} µm" if na else "—"
+            res = f"{number(0.61 * 0.55 / na, 2)} µm" if na else "—"
+            dof = f"{number(0.55 * n / na**2, 1)} µm" if na else "—"
             for c, text in enumerate((o.get("label", "?"), fov, res, dof)):
                 self.fov_grid.addWidget(QLabel(text), r, c)
         if not self._objectives:
@@ -380,7 +381,7 @@ class DevicesPage(Page):
 
         self._set_detail(
             EmptyState(
-                "chip", "Aucun périphérique", "Ajoutez une caméra, un revolver d'objectifs, une lampe..."
+                "chip", "Aucun périphérique", "Ajoutez une caméra, un revolver d'objectifs, une lampe…"
             )
         )
 
@@ -544,7 +545,7 @@ class DevicesPage(Page):
         try:
             M.rename_device(self._data, d["name"], new)
         except ValueError as exc:
-            QMessageBox.warning(self, "Identifiant", str(exc))
+            QMessageBox.warning(self, "Identifiant", f"Cet identifiant ne convient pas : {exc}")
             field.setText(d["name"])
             return
         field.setText(new)
@@ -591,7 +592,7 @@ class DevicesPage(Page):
 # ======================================================================= rôles
 class RolesPage(Page):
     title = "Rôles"
-    subtitle = "Quel périphérique sert de caméra, de revolver, de lampe de transmission..."
+    subtitle = "Quel périphérique sert de caméra, de revolver, de lampe de transmission…"
     icon = "link"
 
     HINTS: ClassVar[dict[str, str]] = {
@@ -1235,7 +1236,7 @@ class ChannelsPage(Page):
 # ======================================================================= YAML
 class YamlPage(Page):
     title = "Fichier YAML"
-    subtitle = "Le profil complet, tel qu'il sera enregistré. Pour les réglages très avancés."
+    subtitle = "La configuration complète, telle qu'elle sera enregistrée. Pour les réglages très avancés."
     icon = "code"
 
     def __init__(self, editor: ConfigEditor) -> None:
@@ -1258,7 +1259,7 @@ class YamlPage(Page):
             self.status.setText("Les modifications faites ici sont appliquées en quittant la page.")
         except Exception as exc:
             text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
-            self.status.setText(f"Profil incomplet : {exc}")
+            self.status.setText(f"Configuration incomplète : {exc}")
         self.text.setPlainText(text)
         self._dirty = False
 

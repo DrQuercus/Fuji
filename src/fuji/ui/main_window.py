@@ -29,7 +29,7 @@ from typing import Any
 import numpy as np
 from napari.components import ViewerModel
 from napari.qt import QtViewer
-from qtpy.QtCore import Qt, QTimer, Signal
+from qtpy.QtCore import QEvent, Qt, QTimer, Signal
 from qtpy.QtGui import QAction, QKeySequence
 from qtpy.QtWidgets import (
     QApplication,
@@ -58,15 +58,17 @@ from fuji.core.frame import Frame, is_rgb
 from fuji.core.microscope import Microscope
 from fuji.core.profile import MicroscopeProfile, available_profiles
 from fuji.io import save_image
+from fuji.text import count, number, plural
 
 from . import documents
 from .chrome import PINNED, SECTIONS, Sidebar, TopBar, mode_of, sections_of
-from .components import PanelHeader, icon_button
+from .components import EmptyState, PanelHeader, icon_button, shortcut
 from .compose_panel import ComposePanel
 from .config.editor import ConfigEditor
 from .config.wizard import NewMicroscopeDialog
 from .display_bar import DisplayBar, scale_bar_of
 from .gallery import GalleryPanel
+from .layers_panel import LayersPanel
 from .live import LIVE_LAYER, LiveController, contrast_for, units_for
 from .panels.acquisition_panel import AcquisitionPanel
 from .panels.analysis_panel import AnalysisPanel, layer_to_image
@@ -79,17 +81,27 @@ from .prefs import settings
 from .qt_bridge import QtManualActionHandler
 from .quickbar import QuickBar
 from .results import ResultsWidget, accumulate
-from .theme import ThemeManager, napari_theme_id, palette
+from .theme import ThemeManager, napari_stylesheet, napari_theme_id, palette
 
 log = logging.getLogger(__name__)
+#: mots qui signalent un échec dans un message destiné à la barre d'état
+_PROBLEM_WORDS = (
+    "impossible",
+    "échec",
+    "erreur",
+    "n'a pas pu",
+    "ne répond pas",
+    "non enregistré",
+    "non appliqué",
+)
 
 SUBTITLES = {
     "images": "Enregistrées automatiquement. Double-clic : ouvrir dans Analyse.",
     "control": "Caméra, optique, éclairage, platine et mise au point.",
-    "assistants": "Köhler, mise au point, calibration du pixel, éclairage.",
-    "acquisition": "Time-lapse, piles Z, canaux, positions → OME-TIFF.",
+    "assistants": "Des aides pas à pas pour régler le microscope.",
+    "acquisition": "Images composées en direct, séries dans le temps, piles Z, canaux.",
     "analysis": "Rangés par tâche, chacun avec son explication. Démarches guidées pour débuter.",
-    "layers": "Images affichées et réglages d'affichage.",
+    "layers": "Ce qui est posé sur l'image : masques, formes, points.",
     "config": "Configuration complète et choix du microscope.",
     "settings": "Apparence, Fiji, caméras ToupTek, dossiers.",
 }
@@ -119,6 +131,33 @@ def _scroll(widget: QWidget) -> QScrollArea:
     area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     area.setWidget(widget)
     return area
+
+
+def _follow_scale(drawing: Any, old_scale: np.ndarray, origin: np.ndarray, px: float) -> None:
+    """Met un calque de dessin (« ROI », « Points ») à la nouvelle échelle de l'image, ses
+    formes sur les mêmes pixels qu'avant. Sans cela, après « Définir l'échelle », la ligne
+    tracée quittait la barre qu'elle mesurait et les mesures suivantes étaient fausses."""
+    d_scale = np.asarray(drawing.scale[-2:], dtype=float)
+    d_origin = np.asarray(drawing.translate[-2:], dtype=float)
+
+    def to_pixels(vertices: Any) -> np.ndarray:
+        v = np.array(vertices, dtype=float)
+        v[:, -2:] = (v[:, -2:] * d_scale + d_origin - origin) / old_scale
+        return v
+
+    try:
+        if len(drawing.data):
+            if isinstance(drawing.data, list):  # formes : une liste de sommets
+                drawing.data = [to_pixels(v) for v in drawing.data]
+            else:
+                drawing.data = to_pixels(drawing.data)
+        scale, translate = list(drawing.scale), list(drawing.translate)
+        scale[-2:], translate[-2:] = [px, px], [float(origin[0]), float(origin[1])]
+        drawing.scale, drawing.translate = scale, translate
+        drawing.metadata["pixel_size_um"] = px
+        drawing.units = ("pixel",) * (len(scale) - 2) + ("µm", "µm")
+    except Exception:  # un dessin que l'on ne sait pas déplacer ne doit pas empêcher l'étalonnage
+        log.exception("Calque de dessin non remis à l'échelle")
 
 
 def enable_napari_actions(current: Callable[[], ViewerModel]) -> None:
@@ -153,7 +192,7 @@ def fix_napari_buttons(qt_viewer: QtViewer) -> None:
 
     slots = (
         (lb.deleteButton, viewer.layers.remove_selected, "Fermer les calques sélectionnés"),
-        (vb.resetViewButton, viewer.reset_view, "Recentrer l'image (Ctrl+R)"),
+        (vb.resetViewButton, viewer.reset_view, f"Recentrer l'image ({shortcut('Ctrl+R')})"),
         (vb.ndisplayButton, toggle_3d, "Vue 2D / 3D (piles Z)"),
         (vb.rollDimsButton, viewer.dims.roll, "Faire tourner l'ordre des axes"),
         (vb.transposeDimsButton, viewer.dims.transpose, "Échanger les deux axes affichés"),
@@ -167,23 +206,6 @@ def fix_napari_buttons(qt_viewer: QtViewer) -> None:
         button.clicked.connect(lambda _=False, f=slot: f())
         button.setToolTip(tip)
     vb.consoleButton.hide()  # la console Python de napari n'existe pas dans Fuji
-
-
-class LayersPanel(QWidget):
-    """Les widgets de calques de napari, regroupés dans le panneau latéral."""
-
-    def __init__(self, qt_viewer: QtViewer, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        fix_napari_buttons(qt_viewer)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(8)
-        lay.addWidget(qt_viewer.layerButtons)
-        lay.addWidget(qt_viewer.layers, 2)
-        lay.addWidget(qt_viewer.viewerButtons)
-        # les réglages d'un calque (masque, formes) sont hauts : ils défilent plutôt que
-        # d'imposer leur hauteur à la fenêtre (elle doit tenir sur un écran de portable)
-        lay.addWidget(_scroll(qt_viewer.controls), 3)
 
 
 class MainWindow(QMainWindow):
@@ -262,11 +284,27 @@ class MainWindow(QMainWindow):
             self.canvas_stack.addWidget(page)
             pages.append(page_lay)
         self.canvas_layout = pages[0]  # la barre rapide s'y ajoute (espace Microscope)
+        # espace Analyse sans image : une invitation à en ouvrir une, par-dessus la vue vide
+        self.empty_hint = EmptyState(
+            "gallery",
+            "Aucune image ouverte",
+            "Double-cliquez une image de la liste « Images »,\nou glissez un fichier sur la fenêtre.",
+            parent=self.canvas_stack.widget(1),
+        )
+        self.empty_hint.setObjectName("CanvasEmpty")
+        self.empty_hint.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.qt_viewer.installEventFilter(self)
+        self.viewer.layers.events.inserted.connect(self._update_empty_hint)
+        self.viewer.layers.events.removed.connect(self._update_empty_hint)
         self.quickbar: QuickBar | None = None
         # espace Analyse : histogramme et contraste de l'image affichée, toujours sous l'image
         self.display_bar = DisplayBar(
             self.viewer, scale_bars=[_scale_bar(self.viewer), _scale_bar(self.scope_viewer)]
         )
+        self.display_bar.other_views = [self.scope_viewer]
+        for emitter in (self.scope_viewer.layers.events.inserted, self.scope_viewer.layers.events.removed):
+            emitter.connect(self.display_bar.sync_scale_bars)
+        self.display_bar.sync_scale_bars()
         self.display_bar.message.connect(self.notify)
         self.display_bar.apply_requested.connect(self._apply_display)
         self.display_bar.close_requested.connect(lambda: self.close_image())
@@ -336,10 +374,31 @@ class MainWindow(QMainWindow):
         )
         self.accumulate_box.setChecked(self.settings.value("results/accumulate", False, type=bool))
         self.accumulate_box.toggled.connect(lambda on: self.settings.setValue("results/accumulate", on))
-        self.results_tabs.setCornerWidget(self.accumulate_box, Qt.Corner.TopRightCorner)
         self.results_dock = QDockWidget("Résultats", self)
         self.results_dock.setObjectName("dock_results")
         self.results_dock.setWidget(self.results_tabs)
+        # barre de titre aux couleurs de Fuji : titre, « Cumuler », détacher, fermer
+        bar = QWidget()
+        bar.setObjectName("DockTitle")
+        bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        bar_lay = QHBoxLayout(bar)
+        bar_lay.setContentsMargins(14, 4, 8, 4)
+        bar_lay.setSpacing(6)
+        title = QLabel("Résultats")
+        title.setObjectName("CardTitle")
+        bar_lay.addWidget(title)
+        bar_lay.addStretch(1)
+        bar_lay.addWidget(self.accumulate_box)
+        float_btn = icon_button("copy", "Détacher le volet dans sa propre fenêtre (ou le rattacher)")
+        float_btn.clicked.connect(lambda: self.results_dock.setFloating(not self.results_dock.isFloating()))
+        close_btn = icon_button(
+            "close", "Fermer le volet (les tableaux restent : menu Affichage → Résultats)"
+        )
+        close_btn.clicked.connect(self.results_dock.hide)
+        for b in (float_btn, close_btn):
+            b.setFixedSize(30, 28)
+            bar_lay.addWidget(b)
+        self.results_dock.setTitleBarWidget(bar)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.results_dock)
         self.results_dock.hide()
 
@@ -354,7 +413,16 @@ class MainWindow(QMainWindow):
         self.analysis.table_ready.connect(self.show_table)
         self.analysis.message.connect(self.notify)
         self._set_page("analysis", _scroll(self.analysis))
-        self._set_page("layers", LayersPanel(self.qt_viewer))
+        fix_napari_buttons(self.qt_viewer)
+        qt = self.qt_viewer
+        # réglages complets de napari : hauts, ils défilent ; montrés en mode expert seulement
+        controls = _scroll(qt.controls)
+        controls.setMinimumHeight(260)
+        self.layers_panel = LayersPanel(self.viewer, [qt.layerButtons, qt.layers, qt.viewerButtons, controls])
+        self.layers_panel.message.connect(self.notify)
+        self.layers_panel.save_requested.connect(self.save_layer)
+        self.layers_panel.close_requested.connect(lambda doc: self.close_image(doc))
+        self._set_page("layers", _scroll(self.layers_panel))
         self.gallery = GalleryPanel()
         self.gallery.open_requested.connect(self.open_capture)
         self.gallery.deleted.connect(self._on_images_deleted)
@@ -373,6 +441,7 @@ class MainWindow(QMainWindow):
 
         # barre d'état -----------------------------------------------------------
         sb = self.statusBar()
+        sb.setSizeGripEnabled(False)
         self.cursor_label = QLabel()
         self.cursor_label.setObjectName("hint")
         self.optics_label = QLabel()
@@ -393,6 +462,8 @@ class MainWindow(QMainWindow):
         self.topbar.mode_changed.connect(self.set_mode)
         self.viewer.events.status.connect(self._on_status)
         self.scope_viewer.events.status.connect(self._on_status)
+        for view in (self.viewer, self.scope_viewer):  # image fermée : sa valeur sous la souris s'efface
+            view.layers.events.removed.connect(self._on_status)
         # double-clic sur le live : centrer le point (platine motorisée) ; sinon le zoom de napari
         self._default_double_click = list(self.scope_viewer.mouse_double_click_callbacks)
         self.scope_viewer.mouse_double_click_callbacks.clear()
@@ -418,7 +489,7 @@ class MainWindow(QMainWindow):
         # image de référence : la correction du fond reprend comme on l'avait laissée
         scope.flatfield.set_enabled(self.settings.value("flatfield/enabled", False, type=bool))
         self.live = LiveController(scope, self.scope_viewer, self)
-        self.live.fps_changed.connect(lambda f: self.fps_label.setText(f"{f:4.1f} im/s"))
+        self.live.fps_changed.connect(lambda f: self.fps_label.setText(f"{number(f, 1)} im/s"))
         self.live.live_changed.connect(self._on_live_changed)
         self.live.frame_shown.connect(self._on_live_frame)
         self.live.stalled.connect(self.warn)
@@ -764,6 +835,7 @@ class MainWindow(QMainWindow):
             self.control_tabs.tabBar().setVisible(expert)
             self.properties.set_expert(expert)
         self.analysis.set_expert(expert)
+        self.layers_panel.set_expert(expert)
 
     def _set_auto_contrast(self, on: bool) -> None:
         if self.live is not None:
@@ -782,6 +854,15 @@ class MainWindow(QMainWindow):
                 viewer.theme = napari_theme_id(palette())
             except Exception:  # thème non enregistré (napari absent du style)
                 pass
+        # le style de napari ne s'applique qu'à ses propres composants (vues, réglages de calque)
+        qss = napari_stylesheet(palette())
+        for widget in self._napari_widgets():
+            widget.setStyleSheet(qss)
+
+    def _napari_widgets(self) -> list[QWidget]:
+        """Les composants qui viennent de napari : eux seuls reçoivent sa feuille de style."""
+        qt = self.qt_viewer  # ses réglages de calque sont sortis de la vue, rangés dans « Calques »
+        return [self.scope_qt, qt, qt.controls, qt.layers, qt.layerButtons, qt.viewerButtons]
 
     # ================================================================ menus
     def _action(
@@ -901,6 +982,8 @@ class MainWindow(QMainWindow):
         self.results_tabs.removeTab(index)
         if widget is not None:
             widget.deleteLater()  # sinon le tableau (et ses données) reste en mémoire
+        if not self.results_tabs.count():  # plus aucun tableau : le volet vide rend sa place à l'image
+            self.results_dock.hide()
 
     # ------------------------------------------------------------ glisser-déposer
     def dragEnterEvent(self, event: Any) -> None:
@@ -918,6 +1001,11 @@ class MainWindow(QMainWindow):
 
     # ================================================================ état
     def notify(self, text: str) -> None:
+        """Un message dans la barre d'état. Celui qui annonce un échec (moteurs, caméra,
+        enregistrement…) y reste jusqu'au suivant, au lieu de s'effacer en six secondes."""
+        if any(word in text.lower() for word in _PROBLEM_WORDS):
+            self.warn(text)
+            return
         self.statusBar().showMessage(text, 6000)
 
     def warn(self, text: str) -> None:
@@ -925,14 +1013,56 @@ class MainWindow(QMainWindow):
         log.warning(text)
         self.statusBar().showMessage(f"⚠ {text}")
 
+    def eventFilter(self, obj: Any, event: Any) -> bool:
+        if obj is self.qt_viewer and event.type() in (QEvent.Type.Resize, QEvent.Type.Move, QEvent.Type.Show):
+            self._update_empty_hint()
+        return super().eventFilter(obj, event)
+
+    def _update_empty_hint(self, *_: Any) -> None:
+        """L'invitation couvre la vue d'Analyse tant qu'aucune image n'y est ouverte."""
+        empty = len(self.viewer.layers) == 0
+        if empty:
+            self.empty_hint.setGeometry(self.qt_viewer.geometry())
+            self.empty_hint.raise_()
+        self.empty_hint.setVisible(empty)
+
     def _on_status(self, event: Any) -> None:
         """Coordonnées et valeur sous la souris : dans leur propre case, pour ne pas effacer
         les messages (dont les erreurs) affichés à gauche."""
-        value = event.value
-        if isinstance(value, dict):
-            value = value.get("coordinates", "")
-        text = str(value or "")
-        self.cursor_label.setText("" if text == "Ready" else text)
+        del event  # napari donne un texte brut (« [1.000 1.000]: [1643, 1654] ») : on écrit le nôtre
+        self.cursor_label.setText(self._cursor_text())
+
+    def _cursor_text(self) -> str:
+        """« x 512 · y 300 — 1643, 1654, 1628 » : le pixel sous la souris et sa valeur."""
+        from napari.layers import Image as ImageLayer
+
+        viewer = self.current_viewer()
+        if self.mode == "analyse":
+            layer = self.display_bar.layer
+        else:
+            images = [ly for ly in reversed(viewer.layers) if isinstance(ly, ImageLayer) and ly.visible]
+            layer = images[0] if images else None
+        if layer is None:
+            return ""
+        try:
+            position = viewer.cursor.position
+            data = layer.world_to_data(position)
+            y, x = int(round(float(data[-2]))), int(round(float(data[-1])))
+            shape = layer.data.shape
+            height, width = shape[-3:-1] if layer.rgb else shape[-2:]
+            if not (0 <= y < height and 0 <= x < width):
+                return ""
+            value = layer.get_value(position, world=True)
+        except Exception:  # calque en cours de changement
+            return ""
+        if value is None:
+            return f"x {x} · y {y}"
+        values = np.atleast_1d(np.asarray(value)).ravel()[:4]
+        if np.issubdtype(values.dtype, np.integer):
+            shown = ", ".join(str(int(v)) for v in values)
+        else:
+            shown = ", ".join(number(float(v)) for v in values)
+        return f"x {x} · y {y} — {shown}"
 
     def _emit_optics_changed(self, *_: object) -> None:
         try:
@@ -1038,7 +1168,7 @@ class MainWindow(QMainWindow):
         def work() -> None:
             try:
                 x, y = center_on_pixel(scope, row, col, shape)  # type: ignore[arg-type]
-                self._message.emit(f"Platine : X {x:.1f} µm, Y {y:.1f} µm")
+                self._message.emit(f"Platine : X {number(x, 1)} µm, Y {number(y, 1)} µm")
             except Exception as exc:
                 self._message.emit(f"Centrage impossible : {exc}")
 
@@ -1054,7 +1184,7 @@ class MainWindow(QMainWindow):
             parts.append(obj.label)
         if self.m.channel:
             parts.append(self.m.channel)
-        parts.append(f"{px:.4f} µm/px ({self.m.pixel_size_source()})" if px else "non calibré")
+        parts.append(f"{number(px)} µm/px ({self.m.pixel_size_source()})" if px else "non calibré")
         self.optics_label.setText("  ·  ".join(parts))
 
     def _toggle_live(self) -> None:
@@ -1096,7 +1226,9 @@ class MainWindow(QMainWindow):
         self.topbar.capture.setEnabled(False)
         worker = create_worker(self.m.snap, _start_thread=False, _ignore_errors=True)
         worker.returned.connect(self._on_snap)
-        worker.errored.connect(lambda e: QMessageBox.warning(self, "Capture", str(e)))
+        worker.errored.connect(
+            lambda e: QMessageBox.warning(self, "Capture", f"La capture n'a pas abouti : {e}")
+        )
         worker.finished.connect(lambda: self.topbar.capture.setEnabled(not self._acquiring))
         worker.start()
 
@@ -1206,15 +1338,20 @@ class MainWindow(QMainWindow):
 
     def _ask_close(self, docs: list[str], lost: list[Any], opening: bool) -> str:
         names = ", ".join(ly.name for ly in lost[:4]) + (" …" if len(lost) > 4 else "")
-        which = docs[0] if len(docs) == 1 else f"{len(docs)} images"
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Question)
         box.setWindowTitle("Fermer l'image")
-        box.setText(f"Fermer {which} et ses résultats ?")
+        if not docs:  # un dessin fait sans image
+            box.setText("Fermer le dessin en cours ?")
+        elif len(docs) == 1:
+            box.setText(f"Fermer {docs[0]} et ses résultats ?")
+        else:
+            box.setText(f"Fermer {len(docs)} images et leurs résultats ?")
         box.setInformativeText(
-            f"{len(lost)} calque(s) de résultats seront fermés : {names}.\n"
-            "Les tableaux de résultats restent ; enregistrez un masque avec Fichier → "
-            "Enregistrer le calque si vous voulez le garder."
+            f"{count(len(lost), 'résultat')} non {plural(len(lost), 'enregistré')} "
+            f"{plural(len(lost), 'sera', 'seront')} {plural(len(lost), 'perdu')} : {names}.\n\n"
+            "Les tableaux de mesures restent ouverts. Pour garder un masque : Annuler, puis "
+            "Fichier → Enregistrer le calque."
         )
         close_btn = box.addButton("Fermer", QMessageBox.ButtonRole.AcceptRole)
         keep_btn = box.addButton("Garder ouverte", QMessageBox.ButtonRole.ActionRole) if opening else None
@@ -1516,22 +1653,53 @@ class MainWindow(QMainWindow):
         self.analysis.run_operation(name, {"image": layer.name, "image1": layer.name, "roi": ROI_LAYER})
 
     def _apply_display(self, name: str, black: float, white: float, gamma: float) -> None:
-        """« Appliquer le contraste aux pixels » : une nouvelle image, telle qu'on la voit."""
+        """« Appliquer le contraste aux pixels » : une nouvelle image, telle qu'on la voit.
+
+        Les bornes sont prises telles quelles. En passant par la fiche « Niveaux », un noir
+        négatif (courant dès que l'on monte la luminosité) devenait 0 et des bornes non entières
+        étaient arrondies : le résultat n'était pas ce que montrait l'écran."""
+        from fuji.analysis.ops.adjust import stretch, white_of
+
+        from .display_bar import _INVERTED
+        from .panels.analysis_panel import layer_to_image
+
         if name not in self.viewer.layers:
             return
-        self.set_mode("analyse", "analysis")
-        self.analysis.run_operation(
-            "Niveaux",
-            {"image": name},
-            {
-                "black": black,
-                "white": white,
-                "gamma": min(max(gamma, 0.1), 10.0),
-                "channel": "tous",
-                "out_black": 0.0,
-                "out_white": 100.0,
-            },
+        layer = self.viewer.layers[name]
+        try:
+            image = layer_to_image(layer, self.viewer)
+        except Exception as exc:
+            self.notify(f"Contraste non appliqué : {exc}")
+            return
+        doc = documents.doc_of(layer)
+        inverted = not layer.rgb and str(layer.colormap.name).endswith(_INVERTED)
+        palette_name = str(layer.colormap.name).removesuffix(_INVERTED) if not layer.rgb else None
+        gamma = min(max(float(gamma), 0.1), 10.0)
+
+        def done(result: Any) -> None:
+            if name not in self.viewer.layers:  # image fermée pendant le calcul
+                return
+            new = self.analysis.add_result(result, doc=doc)
+            if new is None:
+                return
+            try:  # les pixels sont déjà étirés : affichés du noir au blanc, sans autre réglage
+                full = float(white_of(result))
+                new.contrast_limits_range = (0.0, full)
+                new.contrast_limits = (0.0, full)
+                new.gamma = 1.0
+                if palette_name:
+                    new.colormap = palette_name
+            except Exception:
+                log.exception("Affichage du résultat non réglé")
+            self.notify(f"Contraste appliqué aux pixels : nouvelle image « {new.name} »")
+
+        self.notify("Contraste appliqué aux pixels : calcul…")
+        worker = create_worker(
+            stretch, image, black, white, gamma, inverted, _start_thread=False, _ignore_errors=True
         )
+        worker.returned.connect(done)
+        worker.errored.connect(lambda exc: self.notify(f"Contraste non appliqué : {exc}"))
+        worker.start()
 
     def quick_measure(self) -> None:
         """« Mesurer » d'ImageJ : les ROI dessinées s'il y en a, sinon l'image entière."""
@@ -1562,7 +1730,7 @@ class MainWindow(QMainWindow):
             known, ok = QInputDialog.getDouble(
                 self,
                 "Définir l'échelle",
-                f"La dernière ligne tracée mesure {length_px:.1f} pixels.\n"
+                f"La dernière ligne tracée mesure {number(length_px, 1)} pixels.\n"
                 "Distance réelle correspondante (µm) — 0 pour saisir la taille du pixel :",
                 0.0,
                 0.0,
@@ -1581,7 +1749,10 @@ class MainWindow(QMainWindow):
             self.set_pixel_size(layer, px)
 
     def set_pixel_size(self, layer: Any, px: float) -> None:
-        """Applique une taille de pixel à un calque (les mesures suivantes seront en µm)."""
+        """Applique une taille de pixel à un calque (les mesures suivantes seront en µm). Les
+        formes et les points déjà dessinés restent sur les mêmes pixels de l'image."""
+        old_scale = np.asarray(layer.scale[-2:], dtype=float)
+        origin = np.asarray(layer.translate[-2:], dtype=float)
         scale = list(layer.scale)
         scale[-2:] = [px, px]
         layer.scale = scale
@@ -1590,8 +1761,12 @@ class MainWindow(QMainWindow):
             layer.units = ("pixel",) * (len(scale) - 2) + ("µm", "µm")
         except Exception:  # anciennes versions de napari : pas d'unités par calque
             pass
+        if layer in self.viewer.layers:
+            for name in (documents.ROI_LAYER, documents.POINTS_LAYER):
+                if name in self.viewer.layers:
+                    _follow_scale(self.viewer.layers[name], old_scale, origin, float(px))
         self.viewer.reset_view()
-        self.notify(f"Échelle de « {layer.name} » : {px:.4f} µm/pixel")
+        self.notify(f"Échelle de « {layer.name} » : {number(px)} µm/px")
 
     def show_table(self, table: Table) -> None:
         """Montre un tableau de résultats : dans un nouvel onglet, ou — avec « Cumuler » — à
@@ -1626,7 +1801,7 @@ class MainWindow(QMainWindow):
         info = {name: dev.describe() for name, dev in self.m.devices.items()}
         box = QMessageBox(self)
         box.setWindowTitle("Matériel")
-        box.setText(f"{len(info)} périphérique(s) — « {self.m.profile.name} »")
+        box.setText(f"{count(len(info), 'périphérique')} — « {self.m.profile.name} »")
         box.setDetailedText(json.dumps(info, indent=2, ensure_ascii=False, default=str))
         box.exec()
 
@@ -1634,7 +1809,7 @@ class MainWindow(QMainWindow):
         self.notify("Démarrage de Fiji (Java)… quelques secondes")
         worker = create_worker(ImageJBridge.get().version, _start_thread=False, _ignore_errors=True)
         worker.returned.connect(lambda v: self.notify(f"Fiji prêt : ImageJ {v}"))
-        worker.errored.connect(lambda e: QMessageBox.warning(self, "Fiji", str(e)))
+        worker.errored.connect(lambda e: QMessageBox.warning(self, "Fiji", f"Fiji n'a pas pu démarrer : {e}"))
         worker.start()
 
     def macro_dialog(self) -> None:
@@ -1652,7 +1827,9 @@ class MainWindow(QMainWindow):
             lambda: ImageJBridge.get().run_macro(text, image), _start_thread=False, _ignore_errors=True
         )
         worker.returned.connect(self._on_macro)
-        worker.errored.connect(lambda e: QMessageBox.warning(self, "Macro ImageJ", str(e)))
+        worker.errored.connect(
+            lambda e: QMessageBox.warning(self, "Macro ImageJ", f"La macro n'a pas abouti : {e}")
+        )
         worker.start()
 
     def _on_macro(self, res: Any) -> None:
@@ -1688,4 +1865,5 @@ class MainWindow(QMainWindow):
             self.settings.setValue("window_geometry", self.saveGeometry())
             self.gallery.wait_pending()  # une image en cours d'écriture ne doit pas être tronquée
             self._teardown()
+            self.analysis.drawing.shutdown()
         super().closeEvent(event)

@@ -16,8 +16,7 @@ from qtpy.QtWidgets import (
     QLabel,
     QMessageBox,
     QProgressBar,
-    QPushButton,
-    QTabWidget,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -33,11 +32,21 @@ from fuji.assistants import (
 )
 from fuji.assistants.focus import METRICS, autofocus
 from fuji.core.microscope import Microscope
+from fuji.text import number
 
+from ..components import button, flow, label, set_icon
 from ..flatfield_widget import FlatFieldWidget
 from ..live import LiveController
 from ..widgets import hint_label, row, section
+from .tool_menu import ClickableRow
 
+#: nom montré pour chaque façon de mesurer la netteté
+_METRIC_NAMES = {
+    "tenengrad": "Contours (conseillée)",
+    "laplacien": "Détails fins",
+    "variance normalisée": "Contraste global",
+    "brenner": "Contours horizontaux",
+}
 KOHLER_LAYER = "Köhler (repères)"
 PEAKING_LAYER = "Zones nettes"
 UNIFORMITY_LAYER = "Uniformité de l'éclairage"
@@ -109,8 +118,7 @@ class KohlerWidget(_LiveAssistant):
                 "sur l'échantillon avant de commencer."
             )
         )
-        self.toggle = QPushButton("Démarrer l'assistant")
-        self.toggle.setObjectName("primary")
+        self.toggle = button("Démarrer l'assistant", primary=True)
         self.toggle.clicked.connect(self._toggle)
         lay.addWidget(self.toggle)
         self.title = QLabel()
@@ -125,11 +133,12 @@ class KohlerWidget(_LiveAssistant):
         self.sharp_bar.setFormat("Netteté du bord : %p %")
         self.sharp_bar.setVisible(False)
         lay.addWidget(self.sharp_bar)
-        prev = QPushButton("◀ Étape précédente")
+        prev = button("Précédente", "left", tooltip="Revenir à l'étape précédente")
         prev.clicked.connect(lambda: (self.assistant.back(), self._render_step()))
-        self.next = QPushButton("Étape suivante ▶")
+        self.next = button("Étape suivante", "right")
+        self.next.setLayoutDirection(Qt.LayoutDirection.RightToLeft)  # la flèche après le texte
         self.next.clicked.connect(lambda: (self.assistant.advance(), self._render_step()))
-        lay.addWidget(row(prev, self.next))
+        lay.addWidget(flow(prev, self.next))  # panneau étroit : le second bouton passe dessous
         lay.addStretch(1)
         self._render_step()
 
@@ -156,7 +165,11 @@ class KohlerWidget(_LiveAssistant):
         g = self.assistant.update(frame)
         self.title.setText(g.title)
         self.text.setText(g.message)
-        self.next.setStyleSheet("font-weight: bold;" if g.can_advance else "")
+        if self.next.property("ready") != bool(g.can_advance):  # l'étape est réussie : bouton mis en avant
+            self.next.setProperty("ready", bool(g.can_advance))
+            self.next.setObjectName("primary" if g.can_advance else "")
+            self.next.style().unpolish(self.next)
+            self.next.style().polish(self.next)
         if g.step is KohlerStep.FOCUS_CONDENSER and g.edge_width_px and g.best_edge_width_px:
             self.sharp_bar.setVisible(True)
             self.sharp_bar.setValue(int(100 * g.best_edge_width_px / g.edge_width_px))
@@ -217,38 +230,52 @@ class FocusWidget(_LiveAssistant):
         super().__init__(*args, interval_ms=150, **kwargs)
         self.tracker = FocusTracker()
         lay = QVBoxLayout(self)
-        self.toggle = QPushButton("Démarrer l'aide à la mise au point")
+        motorized = self.m.focus is not None and not self.m.focus.manual
+        lay.addWidget(
+            hint_label(
+                "Une jauge suit la netteté de l'image en direct. "
+                + (
+                    "« Autofocus » cherche le meilleur point tout seul."
+                    if motorized
+                    else "Tournez la vis de mise au point jusqu'à dépasser le maximum, puis revenez "
+                    "au point où la jauge est pleine."
+                )
+            )
+        )
+        self.toggle = button("Démarrer l'aide à la mise au point")
         self.toggle.setObjectName("primary")
         self.toggle.clicked.connect(self._toggle)
         lay.addWidget(self.toggle)
-        self.metric = QComboBox()
-        self.metric.addItems(METRICS)
-        self.metric.currentTextChanged.connect(self._set_metric)
-        lay.addWidget(row(QLabel("Mesure"), self.metric))
         self.bar = QProgressBar()
         self.bar.setRange(0, 100)
-        self.bar.setFormat("Netteté : %p % du meilleur")
+        self.bar.setFormat("Netteté : %p % du meilleur point")
         lay.addWidget(self.bar)
-        self.trend = QLabel()
+        self.trend = hint_label("")
         lay.addWidget(self.trend)
-        reset = QPushButton("Oublier le meilleur")
+        reset = button(
+            "Repartir de zéro",
+            "refresh",
+            tooltip="Oublie la meilleure netteté rencontrée (après un changement de zone ou d'objectif)",
+        )
         reset.clicked.connect(self.tracker.reset)
-        lay.addWidget(reset)
         self.peaking = QCheckBox("Surligner les zones nettes")
+        self.peaking.setToolTip("Colore en rouge, sur le live, ce qui est net à cet instant")
         self.peaking.toggled.connect(lambda on: None if on else self._remove_peaking())
         lay.addWidget(self.peaking)
+        self.metric = QComboBox()
+        for name in METRICS:
+            self.metric.addItem(_METRIC_NAMES.get(name, name), name)
+        self.metric.setToolTip("Façon de chiffrer la netteté ; la première convient presque toujours")
+        self.metric.currentIndexChanged.connect(lambda _i: self._set_metric(self.metric.currentData()))
+        lay.addWidget(row(QLabel("Méthode"), self.metric, stretch_last=True))
+        lay.addWidget(row(reset))
         self._af_was_live = False
-        if self.m.focus is not None and not self.m.focus.manual:
-            self.af_button = QPushButton("Autofocus")
+        if motorized:
+            self.af_button = button(
+                "Autofocus", "focus", tooltip="Balaye la mise au point et s'arrête au plus net"
+            )
             self.af_button.clicked.connect(self._autofocus)
             lay.addWidget(self.af_button)
-        else:
-            lay.addWidget(
-                hint_label(
-                    "Mise au point manuelle : tournez la vis jusqu'à dépasser le maximum, puis "
-                    "revenez au point où la barre est pleine."
-                )
-            )
         lay.addStretch(1)
 
     def _set_metric(self, name: str) -> None:
@@ -263,12 +290,12 @@ class FocusWidget(_LiveAssistant):
         else:
             self.tracker.reset()
             self.start()
-            self.toggle.setText("Arrêter")
+            self.toggle.setText("Arrêter l'aide à la mise au point")
 
     def process(self, frame: np.ndarray) -> None:
         st = self.tracker.update(frame)
         self.bar.setValue(int(100 * st.relative))
-        self.trend.setText(f"Tendance : {st.trend}")
+        self.trend.setText(f"Netteté {st.trend}." if st.trend != "meilleure" else "Meilleur point atteint.")
         if self.peaking.isChecked():
             mask, step = focus_peaking(frame)
             self._show_peaking(mask.astype(np.uint8), step)
@@ -318,10 +345,10 @@ class FocusWidget(_LiveAssistant):
         worker.start()
 
     def _autofocus_done(self, z: float) -> None:
-        self.message.emit(f"Autofocus : Z = {z:.2f} µm")
+        self.message.emit(f"Mise au point automatique faite : Z = {number(z, 2)} µm")
 
     def _autofocus_failed(self, exc: Exception) -> None:
-        QMessageBox.warning(self, "Autofocus", str(exc))
+        QMessageBox.warning(self, "Autofocus", f"La mise au point automatique n'a pas abouti : {exc}")
 
     def _autofocus_finished(self) -> None:
         self.af_button.setEnabled(True)
@@ -351,15 +378,15 @@ class CalibrationWidget(QWidget):
         self.spacing.setRange(0.1, 1000)
         self.spacing.setValue(10.0)
         self.spacing.setSuffix(" µm")
-        lay.addWidget(row(QLabel("Écart entre graduations"), self.spacing))
-        self.measure = QPushButton("Mesurer sur l'image actuelle")
+        lay.addWidget(flow(QLabel("Écart entre graduations"), self.spacing))
+        self.measure = button("Mesurer sur l'image actuelle")
         self.measure.setObjectName("primary")
         self.measure.clicked.connect(self._measure)
         lay.addWidget(self.measure)
         self.result = QLabel()
         self.result.setWordWrap(True)
         lay.addWidget(self.result)
-        self.save = QPushButton("Enregistrer pour l'objectif en place")
+        self.save = button("Enregistrer pour l'objectif en place")
         self.save.setEnabled(False)
         self.save.clicked.connect(self._save)
         lay.addWidget(self.save)
@@ -407,7 +434,7 @@ class CalibrationWidget(QWidget):
         cmp = ""
         if current:
             cmp = (
-                f"<br>Valeur actuelle : {current:.4f} µm ({self.m.pixel_size_source()}), "
+                f"<br>Valeur actuelle : {number(current)} µm/px ({self.m.pixel_size_source()}), "
                 f"écart {100 * (r.pixel_size_um / current - 1):+.1f} %"
             )
         warn = ""
@@ -417,9 +444,9 @@ class CalibrationWidget(QWidget):
                 "régulières. Cadrez plus de traits, refaites la mise au point, puis recommencez."
             )
         self.result.setText(
-            f"<b>{r.pixel_size_um:.4f} µm/pixel</b><br>{r.n_lines} traits, "
-            f"période {r.period_px:.2f} px, rotation caméra {r.angle_deg:+.2f}°, "
-            f"incertitude ±{r.relative_uncertainty * 100:.2f} %{cmp}{warn}"
+            f"<b>{number(r.pixel_size_um)} µm/px</b><br>{r.n_lines} traits, "
+            f"période {number(r.period_px, 2)} px, rotation de la caméra {number(r.angle_deg, 2)}°, "
+            f"incertitude ± {number(r.relative_uncertainty * 100, 2)} %{cmp}{warn}"
         )
         label = self._measured_for[0]
         self.save.setEnabled(label is not None)
@@ -445,7 +472,7 @@ class CalibrationWidget(QWidget):
                 self,
                 "Mesure peu fiable",
                 f"Seulement {r.n_lines} traits reconnus (incertitude "
-                f"±{r.relative_uncertainty * 100:.1f} %). Toutes les mesures faites avec cet "
+                f"± {number(r.relative_uncertainty * 100, 1)} %). Toutes les mesures faites avec cet "
                 "objectif en dépendront.\n\nEnregistrer quand même ?",
             )
             if answer != QMessageBox.StandardButton.Yes:
@@ -453,7 +480,9 @@ class CalibrationWidget(QWidget):
         try:
             self.m.set_pixel_calibration(r.pixel_size_um, label)
         except Exception as exc:
-            QMessageBox.warning(self, "Calibration", str(exc))
+            QMessageBox.warning(
+                self, "Calibration", f"La taille du pixel n'a pas pu être enregistrée : {exc}"
+            )
             return
         try:
             path = self.m.save_profile()
@@ -479,7 +508,7 @@ class IlluminationWidget(QWidget):
             "Uniformité",
             hint="Sur une zone vide de la lame, diaphragme de champ ouvert juste au-delà du champ.",
         )
-        analyse = QPushButton("Analyser l'éclairage")
+        analyse = button("Analyser l'éclairage", primary=True)
         analyse.clicked.connect(self._uniformity)
         blay.addWidget(analyse)
         self.uni_text = QLabel()
@@ -505,12 +534,13 @@ class IlluminationWidget(QWidget):
         try:
             frame = self.m.snap().data
         except Exception as exc:
-            QMessageBox.warning(self, "Éclairage", str(exc))
+            QMessageBox.warning(self, "Éclairage", f"L'éclairage n'a pas pu être analysé : {exc}")
             return
         rep = illumination_uniformity(frame)
         corrected = " (fond corrigé par l'image de référence)" if self.m.flatfield.active else ""
         self.uni_text.setText(
-            f"Min/max : {rep.min_max_ratio:.2f} · coins/centre : {rep.corner_center_ratio:.2f}{corrected}"
+            f"Min/max : {number(rep.min_max_ratio, 2)} · coins/centre : "
+            f"{number(rep.corner_center_ratio, 2)}{corrected}"
             f"<br>{rep.message}"
         )
         h, w = frame.shape[:2]
@@ -549,12 +579,12 @@ class StageWidget(QWidget):
             hint="Sur une lame avec des détails nets dans tout le champ. La platine fait deux petits pas "
             "et revient. Nécessaire pour centrer par double-clic et pour assembler les mosaïques.",
         )
-        self.calibrate = QPushButton("Mesurer l'orientation")
+        self.calibrate = button("Mesurer l'orientation")
         self.calibrate.setObjectName("primary")
         self.calibrate.clicked.connect(self._calibrate)
         self.orientation_text = QLabel()
         self.orientation_text.setWordWrap(True)
-        self.save = QPushButton("Enregistrer dans le profil")
+        self.save = button("Enregistrer dans la configuration")
         self.save.setEnabled(False)
         self.save.clicked.connect(self._save)
         for w in (self.calibrate, self.orientation_text, self.save):
@@ -565,18 +595,18 @@ class StageWidget(QWidget):
             hint="Écart entre la même position atteinte par la gauche ou par la droite. Reportez la valeur "
             "dans les options du pilote des moteurs : elle sera rattrapée automatiquement.",
         )
-        self.backlash_x = QPushButton("Mesurer le jeu en X")
-        self.backlash_y = QPushButton("Mesurer le jeu en Y")
+        self.backlash_x = button("Mesurer le jeu en X")
+        self.backlash_y = button("Mesurer le jeu en Y")
         self.backlash_x.clicked.connect(lambda: self._backlash("x"))
         self.backlash_y.clicked.connect(lambda: self._backlash("y"))
         self.backlash_text = QLabel()
         self.backlash_text.setWordWrap(True)
-        blay.addWidget(row(self.backlash_x, self.backlash_y))
+        blay.addWidget(flow(self.backlash_x, self.backlash_y))
         blay.addWidget(self.backlash_text)
         lay.addWidget(box)
         lay.addStretch(1)
         if microscope.profile.stage_orientation:
-            self.orientation_text.setText("Orientation déjà enregistrée dans le profil.")
+            self.orientation_text.setText("Orientation déjà enregistrée dans la configuration.")
 
     def _buttons(self, enabled: bool) -> None:
         for b in (self.calibrate, self.backlash_x, self.backlash_y):
@@ -594,7 +624,7 @@ class StageWidget(QWidget):
         for text in (self.orientation_text, self.backlash_text):
             if text.text().startswith("Mesure en cours"):
                 text.setText("Mesure refusée : rien n'a été modifié.")
-        QMessageBox.warning(self, "Platine", str(exc))
+        QMessageBox.warning(self, "Platine", f"La mesure sur la platine n'a pas abouti : {exc}")
 
     def _calibrate(self) -> None:
         from fuji.core.stage import calibrate_stage
@@ -637,11 +667,14 @@ class StageWidget(QWidget):
         self.backlash_text.setText("Mesure en cours…")
         self._start(
             lambda: measure_backlash(self.m, axis),
-            lambda value: self.backlash_text.setText(f"Jeu en {axis.upper()} : <b>{value:.1f} µm</b>"),
+            lambda value: self.backlash_text.setText(f"Jeu en {axis.upper()} : <b>{number(value, 1)} µm</b>"),
         )
 
 
-class AssistantsPanel(QTabWidget):
+class AssistantsPanel(QWidget):
+    """Les assistants : une liste où chacun est expliqué en une ligne, puis sa page (même
+    principe que le panneau « Outils »)."""
+
     message = Signal(str)
 
     def __init__(
@@ -652,23 +685,100 @@ class AssistantsPanel(QTabWidget):
         self.focus = FocusWidget(microscope, viewer, live)
         self.calibration = CalibrationWidget(microscope, viewer, live)
         self.illumination = IlluminationWidget(microscope, viewer, live)
-        self.addTab(self.kohler, "Köhler")
-        self.addTab(self.focus, "Netteté")
-        self.addTab(self.calibration, "Calibration")
-        self.addTab(self.illumination, "Éclairage")
-        widgets: list[QWidget] = [self.kohler, self.focus, self.calibration, self.illumination]
         self.stage: StageWidget | None = None
         if microscope.xy_stage is not None and not microscope.xy_stage.manual:
             self.stage = StageWidget(microscope, viewer, live)
-            self.addTab(self.stage, "Platine")
-            widgets.append(self.stage)
-        for w in widgets:
-            w.message.connect(self.message.emit)
-        self.setTabPosition(QTabWidget.TabPosition.North)
-        self.setDocumentMode(True)
-        self.setUsesScrollButtons(False)
-        self.setElideMode(Qt.TextElideMode.ElideNone)
-        self.tabBar().setExpanding(False)
+        #: clé → (titre, icône, explication, page)
+        self.assistants: dict[str, tuple[str, str, str, QWidget]] = {
+            "kohler": (
+                "Éclairage de Köhler",
+                "bulb",
+                "Régler le diaphragme et le condenseur, étape par étape",
+                self.kohler,
+            ),
+            "focus": (
+                "Mise au point",
+                "focus",
+                "Une jauge de netteté en direct pour trouver le meilleur point",
+                self.focus,
+            ),
+            "calibration": (
+                "Taille du pixel",
+                "ruler",
+                "Étalonner les mesures en µm avec un micromètre objet",
+                self.calibration,
+            ),
+            "illumination": (
+                "Uniformité de l'éclairage",
+                "sun",
+                "Vérifier le champ et prendre l'image de référence",
+                self.illumination,
+            ),
+        }
+        if self.stage is not None:
+            self.assistants["stage"] = (
+                "Platine motorisée",
+                "move",
+                "Mesurer l'orientation et le jeu mécanique de la platine",
+                self.stage,
+            )
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        # la liste
+        self.menu_page = QWidget()
+        ml = QVBoxLayout(self.menu_page)
+        ml.setContentsMargins(0, 0, 0, 0)
+        ml.setSpacing(2)
+        self.rows: dict[str, ClickableRow] = {}
+        for key, (title, icon_name, summary, _page) in self.assistants.items():
+            entry = ClickableRow(title, summary, icon_name)
+            entry.setObjectName("MenuHeader")
+            chevron = QLabel()
+            set_icon(chevron, "right", "muted", 14)
+            entry.layout().addWidget(chevron, 0, Qt.AlignmentFlag.AlignVCenter)
+            entry.clicked.connect(lambda k=key: self.open(k))
+            self.rows[key] = entry
+            ml.addWidget(entry)
+        ml.addStretch(1)
+        lay.addWidget(self.menu_page)
+        # la page d'un assistant
+        self.page = QWidget()
+        pl = QVBoxLayout(self.page)
+        pl.setContentsMargins(0, 0, 0, 0)
+        pl.setSpacing(8)
+        self.back_btn = button("Tous les assistants", "left", object_name="ghost")
+        self.back_btn.clicked.connect(self.show_menu)
+        pl.addWidget(self.back_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        self.page_title = label("", "step")
+        pl.addWidget(self.page_title)
+        self.stack = QStackedWidget()
+        for _title, _icon, _summary, widget in self.assistants.values():
+            widget.message.connect(self.message.emit)
+            widget.layout().setContentsMargins(0, 0, 0, 0)
+            self.stack.addWidget(widget)
+        pl.addWidget(self.stack, 1)
+        lay.addWidget(self.page, 1)
+        self._current: str | None = None
+        self.show_menu()
+
+    def current(self) -> str | None:
+        """La clé de l'assistant ouvert (``None`` : la liste)."""
+        return self._current
+
+    def open(self, key: str) -> None:
+        """Ouvre la page d'un assistant : « kohler », « focus », « calibration »…"""
+        title, _icon, _summary, widget = self.assistants[key]
+        self._current = key
+        self.page_title.setText(title)
+        self.stack.setCurrentWidget(widget)
+        self.menu_page.hide()
+        self.page.show()
+
+    def show_menu(self) -> None:
+        self._current = None
+        self.page.hide()
+        self.menu_page.show()
 
     def shutdown(self) -> None:
         """Arrête les minuteurs avant la déconnexion du microscope."""

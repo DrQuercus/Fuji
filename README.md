@@ -4,7 +4,7 @@ Logiciel de microscopie qui réunit le meilleur de **Micro-Manager** (piloter le
 matériel), **napari** (afficher les images) et **Fiji/ImageJ** (analyser), dans une
 interface propre qui s'adapte au microscope.
 
-> Projet en développement (version 1.0). Voir
+> Projet en développement (version 1.1). Voir
 > [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) et [docs/FEUILLE_DE_ROUTE.md](docs/FEUILLE_DE_ROUTE.md).
 
 ![Interface de Fuji : espace Microscope, live sur le microscope simulé](docs/interface.png)
@@ -93,6 +93,11 @@ taille du texte se règlent (roue dentée de la rangée « Dessiner »). Le trai
 
 ![Espace Analyse : formes mesurées sur l'image et tableau des mesures](docs/analyse.png)
 
+Le panneau **Calques** liste ce qui est posé sur l'image (masques, formes, points, aperçus) :
+un œil pour cacher ou montrer, monter, descendre, renommer, enregistrer, supprimer, et pour
+le calque choisi son opacité, son mode de fusion ou ses contours. Les réglages complets de
+napari (en anglais) n'apparaissent qu'en mode expert.
+
 Le **tableau de résultats** se règle aussi : colonnes à montrer, décimales, virgule décimale
 pour Excel en français, tri d'un clic sur un titre, **statistiques** de chaque colonne
 (moyenne, écart type, médiane, min, max, somme), **distribution** d'une colonne en
@@ -103,7 +108,7 @@ tableau.
 
 ## Configurer un microscope
 
-Section **Microscope** → « Modifier la configuration… » ou « Nouveau microscope… »
+Section **Matériel** → « Modifier la configuration… » ou « Nouveau microscope… »
 (modèles : microscope manuel + ToupTek, manuel avec fluorescence, Micro-Manager,
 simulé, vide, copie de l'actuel). L'éditeur couvre **tout** le profil :
 
@@ -301,7 +306,7 @@ profils fournis.
 ## État de validation
 
 Le code a été entièrement relu et chaque défaut corrigé est couvert par un test
-(environ 340 tests, lancés à chaque modification sous Linux **et sur macOS**). L'application
+(environ 370 tests, lancés à chaque modification sous Linux **et sur macOS**). L'application
 Mac est construite puis essayée automatiquement sur des Mac de GitHub (processeurs Apple
 et Intel) avant d'être proposée au téléchargement.
 

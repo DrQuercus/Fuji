@@ -35,6 +35,8 @@ from typing import Any, Protocol
 import useq
 from psygnal import Signal
 
+from fuji.text import count, number
+
 from .devices import LightSource, StateDevice
 from .frame import Frame
 from .manual import ManualActionDeclined
@@ -260,8 +262,8 @@ def plan_acquisition(
         per_timepoint = busy * scale / visits
         if interval_s < per_timepoint:
             warnings.append(
-                f"L'intervalle ({interval_s:.2f} s) est plus court que le temps nécessaire "
-                f"pour chaque point de temps (~{per_timepoint:.2f} s) : les images seront décalées."
+                f"L'intervalle ({number(interval_s, 2)} s) est plus court que le temps nécessaire "
+                f"pour chaque point de temps (~{number(per_timepoint, 2)} s) : les images seront décalées."
             )
 
     # matériel requis
@@ -274,7 +276,7 @@ def plan_acquisition(
         warnings.append("Des positions XY sont demandées mais aucune platine n'est déclarée.")
     if manual:
         warnings.append(
-            f"Cette acquisition demandera {manual} action(s) manuelle(s) "
+            f"Cette acquisition demandera {count(manual, 'manipulation manuelle')} "
             "(changement de cube, de lampe, de mise au point...)."
         )
 

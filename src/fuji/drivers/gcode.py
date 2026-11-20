@@ -473,7 +473,7 @@ class GCodeController(Device):
         self.link = link
         self._add_property(
             PropertyInfo(
-                "État", PropertyType.STRING, read_only=True, description="repos, mouvement, alarme..."
+                "État", PropertyType.STRING, read_only=True, description="repos, mouvement, alarme…"
             ),
             self._state,
         )

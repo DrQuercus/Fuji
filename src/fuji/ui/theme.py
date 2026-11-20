@@ -7,6 +7,7 @@ l'interface, y compris les widgets de napari (thème napari enregistré à la vo
 
 from __future__ import annotations
 
+import re
 import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -195,11 +196,20 @@ def _write_assets(p: Palette) -> dict[str, str]:
         "check": f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
         f'stroke="{p.accent_text}" stroke-width="3.2" stroke-linecap="round" '
         f'stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+        "tick": f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
+        f'stroke="{p.text}" stroke-width="3" stroke-linecap="round" '
+        f'stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+        "close": f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
+        f'stroke="{p.muted}" stroke-width="2.4" stroke-linecap="round">'
+        f'<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></svg>',
+        "float": f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
+        f'stroke="{p.muted}" stroke-width="2" stroke-linejoin="round">'
+        f'<rect x="8.5" y="4.5" width="11" height="11" rx="2"/><path d="M15.5 15.5v4h-11v-11h4"/></svg>',
     }
     out = {}
     for name, svg in svgs.items():
         path = folder / f"{name}.svg"
-        if not path.exists():
+        if not path.exists() or path.read_text(encoding="utf-8") != svg:  # image d'une autre version
             path.write_text(svg, encoding="utf-8")
         out[name] = path.as_posix()
     return out
@@ -229,21 +239,25 @@ QLabel {{ background: transparent; }}
 #PanelSubtitle {{ color: {p.muted}; }}
 #SectionTitle {{ color: {p.muted}; font-size: {fs - 1}px; font-weight: 700; letter-spacing: 0.6px; }}
 #Card {{ background: {p.surface2}; border: 1px solid {p.border}; border-radius: 12px; }}
-#Card QLabel#CardTitle {{ font-weight: 700; }}
+#Card QLabel#CardTitle, #DockTitle QLabel#CardTitle {{ font-weight: 700; }}
 #Separator {{ background: {p.border}; border: none; max-height: 1px; min-height: 1px; }}
 
 /* ---------- menus des outils d'analyse ---------- */
 #ToolRow, #MenuHeader {{ background: transparent; border: 1px solid transparent; border-radius: 8px; }}
 #ToolRow:hover, #MenuHeader:hover {{ background: {p.surface3}; border-color: {p.border}; }}
 #MenuHeader QLabel#ToolTitle {{ font-weight: 700; }}
+#CanvasEmpty {{ background: {p.canvas}; }}
+#LayerRow {{ background: transparent; border: 1px solid transparent; border-radius: 8px; }}
+#LayerRow:hover {{ background: {p.surface3}; }}
+#LayerRow[current="true"] {{ background: {p.accent_soft}; border-color: {p.accent}; }}
 QLabel#ToolTitle {{ font-weight: 600; }}
-#Step {{ background: {p.surface2}; border: 1px solid {p.border}; border-radius: 10px; }}
-#StepCurrent {{ background: {p.accent_soft}; border: 1px solid {p.accent}; border-radius: 10px; }}
+#Step {{ background: {p.surface2}; border: 1px solid {p.border}; border-radius: 12px; }}
+#StepCurrent {{ background: {p.accent_soft}; border: 1px solid {p.accent}; border-radius: 12px; }}
 QLabel#StepNumber, QLabel#StepNumberDone {{ min-width: 22px; max-width: 22px; min-height: 22px;
     max-height: 22px; border-radius: 11px; font-weight: 700; }}
 QLabel#StepNumber {{ background: {p.surface3}; color: {p.text}; }}
 QLabel#StepNumberDone {{ background: {p.success}; color: #04130a; }}
-#Banner {{ background: {p.accent_soft}; border: 1px solid {p.accent}; border-radius: 10px; }}
+#Banner {{ background: {p.accent_soft}; border: 1px solid {p.accent}; border-radius: 12px; }}
 #VSeparator {{ background: {p.border}; border: none; max-width: 1px; min-width: 1px; }}
 
 /* ---------- textes ---------- */
@@ -276,9 +290,17 @@ QPushButton#primary:hover {{ background: {p.accent_hover}; border-color: {p.acce
 QPushButton#primary:pressed {{ background: {p.accent_pressed}; }}
 QPushButton#primary:disabled {{ background: {p.surface3}; border-color: {p.border}; color: {p.faint}; }}
 QPushButton#danger {{ color: {p.danger}; }}
-QPushButton#danger:hover {{ background: {p.danger}; border-color: {p.danger}; color: white; }}
-QPushButton#ghost, QToolButton#ghost {{ background: transparent; border: 1px solid transparent; }}
-QPushButton#ghost:hover, QToolButton#ghost:hover {{ background: {p.surface3}; }}
+QPushButton#danger:hover {{ background: {p.danger}; border-color: {p.danger}; color: #ffffff; }}
+QPushButton#danger:disabled {{ color: {p.faint}; }}
+QPushButton#ghost {{ background: transparent; border: 1px solid transparent; }}
+QPushButton#ghost:hover {{ background: {p.surface3}; }}
+QPushButton#ghost:pressed {{ background: {p.border}; }}
+QPushButton#ghost:checked {{ background: {p.accent_soft}; border-color: {p.accent}; }}
+QPushButton#ghost:disabled {{ background: transparent; }}
+/* un bouton-icône qui ouvre un menu n'a pas besoin de la petite flèche */
+QPushButton#ghost::menu-indicator {{ image: none; width: 0px; }}
+QPushButton::menu-indicator {{ image: url("{a["down"]}"); width: 10px; height: 10px;
+    subcontrol-origin: padding; subcontrol-position: right center; right: 8px; }}
 QPushButton#chip {{ border-radius: 13px; padding: 4px 11px; background: {p.surface3}; }}
 QPushButton#chip:checked {{ background: {p.accent}; border-color: {p.accent}; color: {p.accent_text};
                             font-weight: 700; }}
@@ -287,8 +309,11 @@ QPushButton#mode {{ background: transparent; border: none; border-radius: 14px; 
                     color: {p.muted}; font-weight: 600; }}
 QPushButton#mode:hover {{ color: {p.text}; }}
 QPushButton#mode:checked {{ background: {p.accent}; color: {p.accent_text}; font-weight: 700; }}
+QPushButton#mode:checked:disabled {{ background: {p.border_strong}; color: {p.muted}; }}
 QPushButton#live {{ border-radius: 17px; padding: 7px 16px; font-weight: 700; }}
 QPushButton#live:checked {{ background: {p.success}; border-color: {p.success}; color: #04130a; }}
+QPushButton#live:disabled, QPushButton#capture:disabled {{ background: {p.surface3};
+    border-color: {p.border}; color: {p.faint}; }}
 QPushButton#capture {{ border-radius: 17px; padding: 7px 16px; font-weight: 700;
                        background: {p.accent}; border-color: {p.accent}; color: {p.accent_text}; }}
 QPushButton#capture:hover {{ background: {p.accent_hover}; }}
@@ -311,7 +336,11 @@ QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QPlainTe
 QTextEdit:focus {{ border-color: {p.accent}; }}
 QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled {{
     color: {p.faint}; background: {p.surface2}; }}
+QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover, QLineEdit:hover {{
+    border-color: {p.border_strong}; }}
 QComboBox::drop-down {{ border: none; width: 22px; }}
+QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover, QSpinBox::down-button:hover,
+QDoubleSpinBox::down-button:hover {{ background: {p.surface3}; border-radius: 4px; }}
 QComboBox::down-arrow {{ image: url("{a["down"]}"); width: 12px; height: 12px; }}
 QComboBox QAbstractItemView {{ background: {p.surface2}; border: 1px solid {p.border_strong};
     border-radius: 8px; padding: 4px; selection-background-color: {p.accent};
@@ -330,6 +359,13 @@ QCheckBox::indicator {{ width: 16px; height: 16px; border-radius: 5px;
 QCheckBox::indicator:hover {{ border-color: {p.accent}; }}
 QCheckBox::indicator:checked {{ background: {p.accent}; border-color: {p.accent};
     image: url("{a["check"]}"); }}
+QCheckBox::indicator:disabled {{ background: {p.surface3}; border-color: {p.border}; }}
+/* les cases d'une liste (canaux d'une acquisition…) : les mêmes que partout ailleurs */
+QListView::indicator, QTreeView::indicator, QTableView::indicator {{ width: 14px; height: 14px;
+    border-radius: 4px; border: 1.5px solid {p.border_strong}; background: {p.input}; }}
+QListView::indicator:checked, QTreeView::indicator:checked, QTableView::indicator:checked {{
+    background: {p.accent}; border-color: {p.accent}; image: url("{a["check"]}"); }}
+QCheckBox:disabled {{ color: {p.faint}; }}
 QRadioButton::indicator {{ width: 15px; height: 15px; border-radius: 8px;
     border: 1.5px solid {p.border_strong}; background: {p.input}; }}
 QRadioButton::indicator:checked {{ background: {p.accent}; border: 4px solid {p.input}; }}
@@ -339,10 +375,12 @@ QSlider::sub-page:horizontal {{ background: {p.accent}; border-radius: 2px; }}
 QSlider::handle:horizontal {{ background: #ffffff; border: 2px solid {p.accent}; width: 12px;
     height: 12px; margin: -6px 0; border-radius: 8px; }}
 QSlider::handle:horizontal:hover {{ background: {p.accent}; }}
+QSlider::sub-page:horizontal:disabled {{ background: {p.border_strong}; }}
+QSlider::handle:horizontal:disabled {{ background: {p.surface3}; border-color: {p.border_strong}; }}
 
-QProgressBar {{ background: {p.surface3}; border: none; border-radius: 6px; min-height: 12px;
-    max-height: 12px; text-align: center; color: {p.text}; font-size: {fs - 3}px; }}
-QProgressBar::chunk {{ background: {p.accent}; border-radius: 6px; }}
+QProgressBar {{ background: {p.surface3}; border: none; border-radius: 9px; min-height: 18px;
+    max-height: 18px; text-align: center; color: {p.text}; font-size: {fs - 2}px; font-weight: 600; }}
+QProgressBar::chunk {{ background: {p.accent}; border-radius: 9px; }}
 
 /* ---------- listes, tableaux ---------- */
 QListWidget, QTreeWidget, QTreeView, QTableWidget, QTableView {{
@@ -351,7 +389,7 @@ QListWidget, QTreeWidget, QTreeView, QTableWidget, QTableView {{
 QListWidget::item, QTreeView::item {{ padding: 5px 8px; border-radius: 6px; }}
 QListWidget::item:selected, QTreeView::item:selected, QTableView::item:selected {{
     background: {p.accent_soft}; color: {p.text}; }}
-QListWidget::item:hover, QTreeView::item:hover {{ background: {p.surface3}; }}
+QListWidget::item:hover:!selected, QTreeView::item:hover:!selected {{ background: {p.surface3}; }}
 QHeaderView::section {{ background: {p.surface}; color: {p.muted}; border: none;
     border-bottom: 1px solid {p.border}; border-right: 1px solid {p.border}; padding: 6px;
     font-weight: 700; }}
@@ -371,7 +409,10 @@ QTabBar::tab {{ background: transparent; color: {p.muted}; padding: 6px 12px; ma
     border-radius: 8px; font-weight: 600; }}
 QTabBar::tab:selected {{ background: {p.surface3}; color: {p.text}; }}
 QTabBar::tab:hover:!selected {{ color: {p.text}; }}
-QTabBar::close-button {{ subcontrol-position: right; }}
+QTabBar::close-button {{ subcontrol-position: right; image: url("{a["close"]}"); width: 12px;
+    height: 12px; margin: 2px; padding: 2px; border-radius: 6px; }}
+QTabBar::close-button:hover {{ background: {p.border_strong}; }}
+QTabBar QToolButton {{ background: {p.surface2}; border: 1px solid {p.border}; border-radius: 6px; }}
 
 /* ---------- défilement ---------- */
 QScrollArea {{ border: none; background: transparent; }}
@@ -390,17 +431,29 @@ QMenu {{ background: {p.surface2}; border: 1px solid {p.border_strong}; border-r
     padding: 5px; }}
 QMenu::item {{ padding: 6px 22px 6px 12px; border-radius: 6px; }}
 QMenu::item:selected {{ background: {p.accent}; color: {p.accent_text}; }}
+QMenu::item:disabled {{ color: {p.faint}; background: transparent; }}
+QMenu::indicator {{ width: 14px; height: 14px; margin-left: 6px; }}
+QMenu::indicator:checked {{ image: url("{a["tick"]}"); }}
 QMenu::separator {{ height: 1px; background: {p.border}; margin: 5px 8px; }}
 QToolTip {{ background: {p.surface3}; color: {p.text}; border: 1px solid {p.border_strong};
     border-radius: 6px; padding: 5px 8px; }}
 QStatusBar {{ background: {p.surface}; border-top: 1px solid {p.border}; color: {p.muted}; }}
 QStatusBar::item {{ border: none; }}
 QStatusBar QLabel {{ color: {p.muted}; padding: 0 6px; }}
-QSplitter::handle {{ background: {p.border}; }}
-QSplitter::handle:horizontal {{ width: 1px; }}
-QSplitter::handle:vertical {{ height: 1px; }}
-QDockWidget {{ color: {p.muted}; }}
-QDockWidget::title {{ background: {p.surface}; padding: 6px 8px; border-bottom: 1px solid {p.border}; }}
+/* poignées entre les panneaux : un trait d'un pixel, mais cinq pixels à saisir à la souris */
+QSplitter::handle:horizontal {{ width: 5px; background: {p.surface};
+    border-left: 2px solid {p.surface}; border-right: 2px solid {p.surface}; }}
+QSplitter::handle:horizontal:hover {{ background: {p.accent}; }}
+QSplitter::handle:vertical {{ height: 5px; background: {p.surface};
+    border-top: 2px solid {p.surface}; border-bottom: 2px solid {p.surface}; }}
+QSplitter::handle:vertical:hover {{ background: {p.accent}; }}
+QMainWindow::separator {{ background: {p.surface}; width: 5px; height: 5px; }}
+QMainWindow::separator:hover {{ background: {p.accent}; }}
+QDockWidget {{ color: {p.text}; }}
+QDockWidget::title {{ background: {p.surface}; padding: 7px 12px; border-top: 1px solid {p.border};
+    border-bottom: 1px solid {p.border}; }}
+#DockTitle {{ background: {p.surface}; border-top: 1px solid {p.border}; }}
+QStatusBar QSizeGrip {{ width: 0; height: 0; }}
 QMessageBox QLabel {{ min-width: 280px; }}
 """
 
@@ -454,6 +507,28 @@ def _transparent_containers(qss: str) -> str:
     return qss[: match.start(2)] + body + qss[match.end(2) :]
 
 
+def napari_stylesheet(p: Palette | None = None) -> str:
+    """La feuille de style à poser sur les composants de napari, et sur eux seulement.
+
+    Celle de napari, suivie de celle de Fuji qui a le dernier mot. Posée sur toute
+    l'application, celle de napari déteignait sur les composants de Fuji (champs de nombres
+    plus larges et dans une autre taille de police, boutons élargis…)."""
+    p = p or palette()
+    try:
+        from napari.qt import get_stylesheet
+
+        theme_id = register_napari_theme(p)
+        qss = _transparent_containers(get_stylesheet(theme_id))
+        # napari écrit ses tailles de texte en points : 10 pt font 13 pixels sous Windows et
+        # Linux mais 10 sous macOS, où ses composants paraissaient plus petits que ceux de Fuji
+        qss = re.sub(
+            r"font-size:\s*([\d.]+)pt", lambda m: f"font-size: {round(float(m[1]) * 96 / 72)}px", qss
+        )
+        return qss + build_qss(p)
+    except Exception:  # pragma: no cover - napari absent ou thème refusé
+        return ""
+
+
 def apply(app: QApplication, p: Palette | None = None) -> str:
     """Applique le thème à toute l'application ; renvoie l'identifiant du thème napari."""
     p = p or palette()
@@ -461,13 +536,9 @@ def apply(app: QApplication, p: Palette | None = None) -> str:
     font.setPixelSize(p.font_size)
     app.setFont(font)
     theme_id = "dark"
-    napari_qss = ""
     try:
-        from napari.qt import get_stylesheet
-
         theme_id = register_napari_theme(p)
-        napari_qss = _transparent_containers(get_stylesheet(theme_id))
     except Exception:  # pragma: no cover - napari absent ou thème refusé
         pass
-    app.setStyleSheet(napari_qss + build_qss(p))
+    app.setStyleSheet(build_qss(p))
     return theme_id

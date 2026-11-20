@@ -11,7 +11,6 @@ from qtpy.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -23,19 +22,38 @@ from qtpy.QtWidgets import (
 
 from fuji.analysis.image import Plot, Table
 from fuji.core.properties import PropertyInfo, PropertyType
+from fuji.text import number
+
+from .components import Card
+
+#: icône des sections courantes (une section sans icône connue n'en a pas)
+SECTION_ICONS = {
+    "Caméra": "camera",
+    "Optique": "objective",
+    "Éclairage": "bulb",
+    "Platine XY": "move",
+    "Mise au point": "focus",
+    "Enregistrement": "save",
+    "Série dans le temps": "timer",
+    "Pile Z": "stack",
+    "Canaux": "channels",
+    "Positions": "target",
+    "Mosaïque": "mosaic",
+    "Autofocus": "focus",
+}
 
 
-def section(title: str, *, hint: str = "") -> tuple[QGroupBox, QVBoxLayout]:
-    box = QGroupBox(title)
-    lay = QVBoxLayout(box)
-    lay.setContentsMargins(8, 10, 8, 8)
-    lay.setSpacing(6)
+def section(title: str, *, hint: str = "", icon: str | None = None) -> tuple[Card, QVBoxLayout]:
+    """Une section de panneau : une carte avec son titre (et son icône), comme partout dans
+    Fuji. Renvoie la carte et la disposition où ranger son contenu."""
+    card = Card(title, icon_name=icon or SECTION_ICONS.get(title))
+    card.body.setSpacing(6)
     if hint:
         lbl = QLabel(hint)
         lbl.setWordWrap(True)
         lbl.setObjectName("hint")
-        lay.addWidget(lbl)
-    return box, lay
+        card.body.addWidget(lbl)
+    return card, card.body
 
 
 def hint_label(text: str = "") -> QLabel:
@@ -202,13 +220,17 @@ class PlotWidget(QWidget):
             painter.drawLine(QPointF(area.left(), y), QPointF(area.right(), y))
             painter.setPen(QColor(p.muted))
             value = 10.0**tick - 1.0 if self.log_y else tick
-            painter.drawText(QRectF(18, y - 9, area.left() - 24, 18), align_right, f"{float(value):.5g}")
+            painter.drawText(
+                QRectF(18, y - 9, area.left() - 24, 18), align_right, number(float(value), digits=5)
+            )
         for tick in _nice_ticks(x_lo, x_hi, 6):
             x = to_x(tick)
             painter.setPen(QPen(QColor(p.border), 1, Qt.PenStyle.DotLine))
             painter.drawLine(QPointF(x, area.top()), QPointF(x, area.bottom()))
             painter.setPen(QColor(p.muted))
-            painter.drawText(QRectF(x - 40, area.bottom() + 3, 80, 16), align_top, f"{float(tick):.5g}")
+            painter.drawText(
+                QRectF(x - 40, area.bottom() + 3, 80, 16), align_top, number(float(tick), digits=5)
+            )
         painter.setPen(QColor(p.text))
         painter.drawText(
             QRectF(area.left(), area.bottom() + 19, area.width(), 16),

@@ -5,11 +5,10 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from qtpy.QtCore import QUrl, Signal
+from qtpy.QtCore import Qt, QUrl, Signal
 from qtpy.QtGui import QDesktopServices
 from qtpy.QtWidgets import (
     QFileDialog,
-    QGridLayout,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
@@ -24,9 +23,10 @@ from fuji.core.profile import (
     is_builtin_profile,
     user_profile_dir,
 )
+from fuji.text import count
 
 from .. import icons
-from ..components import Card, badge, button, hint, label
+from ..components import Card, badge, button, flow, hint, label
 from ..theme import palette
 
 
@@ -56,8 +56,8 @@ class ConfigPanel(QWidget):
         card.add(label(" · ".join(parts), "hint"))
         card.add(
             label(
-                f"{len(prof.devices)} périphérique(s) · {len(prof.objectives)} objectif(s) · "
-                f"{len(prof.channels)} canal(aux) · {len(prof.filter_sets)} cube(s)",
+                f"{count(len(prof.devices), 'périphérique')} · {count(len(prof.objectives), 'objectif')} · "
+                f"{count(len(prof.channels), 'canal')} · {count(len(prof.filter_sets), 'cube')}",
                 "hint",
             )
         )
@@ -76,6 +76,9 @@ class ConfigPanel(QWidget):
         card = Card("Microscopes disponibles", icon_name="layers")
         self.list = QListWidget()
         self.list.setMinimumHeight(170)
+        # un nom trop long est abrégé (« … ») : pas de défilement horizontal dans un panneau
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.list.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.list.itemDoubleClicked.connect(lambda *_: self._use())
         card.add(self.list)
         use = button("Utiliser", "check")
@@ -84,18 +87,14 @@ class ConfigPanel(QWidget):
         modify.clicked.connect(self._edit_selected)
         delete = button("Supprimer", "trash", object_name="danger")
         delete.clicked.connect(self._delete)
-        new = button("Nouveau microscope…", "plus", primary=True)
+        new = button("Nouveau microscope…", "plus")
         new.clicked.connect(self.new_requested.emit)
         imp = button("Importer…", "open")
         imp.clicked.connect(self._import)
         exp = button("Exporter…", "export")
         exp.clicked.connect(self._export)
-        grid = QGridLayout()
-        grid.setSpacing(6)
-        for i, b in enumerate((use, modify, imp, exp, delete)):
-            grid.addWidget(b, i // 2, i % 2)
-        card.add(layout=grid)
-        card.add(new)
+        card.add(flow(use, modify, new))
+        card.add(flow(imp, exp, delete))
         lay.addWidget(card)
 
         card = Card("Dossier des configurations", icon_name="folder")
@@ -176,7 +175,7 @@ class ConfigPanel(QWidget):
         if path is None:
             return
         dest, _ = QFileDialog.getSaveFileName(
-            self, "Exporter le profil", str(Path.home() / path.name), "Profil Fuji (*.yaml)"
+            self, "Exporter la configuration", str(Path.home() / path.name), "Configuration Fuji (*.yaml)"
         )
         if dest:
             shutil.copy2(path, dest)

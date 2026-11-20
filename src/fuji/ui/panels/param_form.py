@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, ClassVar
 
 from qtpy.QtCore import QObject, Qt, Signal
 from qtpy.QtWidgets import (
@@ -48,10 +48,20 @@ _SLIDER_STEPS = 1000
 _LOG_RATIO = 20.0
 
 
+def _needed(value: float) -> int:
+    """Nombre de décimales qu'il faut pour écrire ``value`` sans l'arrondir (6 au plus)."""
+    for d in range(7):
+        if abs(round(value, d) - value) < 1e-9:
+            return d
+    return 6
+
+
 def _decimals(lo: float, hi: float, step: float | None) -> int:
-    """Nombre de décimales utile pour une plage donnée."""
+    """Nombre de décimales utile pour une plage donnée : de quoi écrire exactement le pas et
+    le minimum du réglage (un pas de 0,25 demande deux décimales, pas une)."""
     if step:
-        return max(0, min(6, -math.floor(math.log10(step) + 1e-9)))
+        low = _needed(lo) if abs(lo) < 1e6 else 0
+        return max(_needed(step), low)
     span = abs(hi - lo)
     if span >= 1000:
         return 0
@@ -83,6 +93,44 @@ def nice_label(spec: ParamSpec) -> str:
     return f"{text} ({spec.meta.unit})" if spec.meta.unit else text
 
 
+def _int(value: float) -> int:
+    """Entier le plus proche, borné à ce qu'un champ de saisie sait contenir."""
+    return int(max(-(2**31) + 1, min(2**31 - 1, round(value))))
+
+
+class _StepSlider(QSlider):
+    """Curseur dont les flèches du clavier (et la molette, quand il a le clavier) avancent d'un
+    pas du réglage, comme dans le champ voisin. Avec ses mille positions arrondies au pas, il
+    fallait vingt à cent appuis sur une flèche pour que la valeur change."""
+
+    stepped = Signal(int)
+    _KEYS: ClassVar[dict[Any, int]] = {
+        Qt.Key.Key_Right: 1,
+        Qt.Key.Key_Up: 1,
+        Qt.Key.Key_Left: -1,
+        Qt.Key.Key_Down: -1,
+        Qt.Key.Key_PageUp: 10,
+        Qt.Key.Key_PageDown: -10,
+    }
+
+    def keyPressEvent(self, event: Any) -> None:
+        steps = self._KEYS.get(event.key())
+        if steps is None:
+            super().keyPressEvent(event)
+            return
+        self.stepped.emit(steps)
+        event.accept()
+
+    def wheelEvent(self, event: Any) -> None:
+        if not self.hasFocus():  # la molette fait défiler le panneau, sans toucher au réglage survolé
+            event.ignore()
+            return
+        delta = event.angleDelta().y()
+        if delta:
+            self.stepped.emit(1 if delta > 0 else -1)
+        event.accept()
+
+
 class SliderSpin(QWidget):
     """Un curseur et un champ numérique liés."""
 
@@ -94,13 +142,16 @@ class SliderSpin(QWidget):
         super().__init__(parent)
         self.integer = integer
         self._lo, self._hi, self._step = float(lo), float(hi), step
+        self._field = (float(lo), float(hi))
+        self._decimals: int | None = None  # imposé (sinon d'après le pas ou la course)
         self._log = False
         self._syncing = False
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
-        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider = _StepSlider(Qt.Orientation.Horizontal)
         self.slider.setMinimumWidth(70)
+        self.slider.stepped.connect(lambda steps: self.spin.stepBy(steps))
         self.spin: QSpinBox | QDoubleSpinBox = QSpinBox() if integer else QDoubleSpinBox()
         self.spin.setKeyboardTracking(False)
         self.spin.setMinimumWidth(64)
@@ -115,35 +166,46 @@ class SliderSpin(QWidget):
     def set_slider_span(self, top: float) -> None:
         """Limite la course du curseur à ``top`` (le champ garde toute la plage)."""
         self._top = float(top)
-        self.set_range(self._lo, self._full_hi)
+        self.set_range(self._field[0], self._field[1])
+
+    def set_slider_range(self, lo: float, hi: float) -> None:
+        """Course du curseur, indépendante de la plage du champ : le curseur parcourt les
+        valeurs utiles (celles de l'image), le champ accepte tout ce que l'outil accepte."""
+        self._course = (float(lo), float(hi))
+        self.set_range(self._field[0], self._field[1])
 
     def set_range(self, lo: float, hi: float) -> None:
+        """Plage du champ ; le curseur la parcourt, ou seulement la course qu'on lui a fixée."""
         if hi <= lo:
             hi = lo + 1
-        self._full_hi = float(hi)
-        spin_hi = float(hi)
+        self._field = (float(lo), float(hi))
+        s_lo, s_hi = float(lo), float(hi)
+        course = getattr(self, "_course", None)
         top = getattr(self, "_top", None)
-        if top is not None and lo < top < hi:
-            hi = top  # course du curseur ; le champ va jusqu'à spin_hi
-        self._lo, self._hi = float(lo), float(hi)
-        self._log = lo > 0 and hi / lo >= _LOG_RATIO
+        if course is not None:
+            s_lo, s_hi = max(lo, course[0]), min(hi, course[1])
+        elif top is not None and lo < top < hi:
+            s_hi = top
+        if s_hi <= s_lo:
+            s_hi = s_lo + 1
+        self._lo, self._hi = s_lo, s_hi
+        self._log = s_lo > 0 and s_hi / s_lo >= _LOG_RATIO
         self._syncing = True
         try:
             if self.integer:
                 assert isinstance(self.spin, QSpinBox)
-                self.spin.setRange(int(round(lo)), int(round(spin_hi)))
+                self.spin.setRange(_int(lo), _int(hi))
                 self.spin.setSingleStep(max(1, int(self._step or 1)))
-                span = int(round(hi)) - int(round(lo))
+                span = _int(s_hi) - _int(s_lo)
                 linear = span <= 4 * _SLIDER_STEPS and not self._log
-                self.slider.setRange(
-                    int(round(lo)) if linear else 0, int(round(hi)) if linear else _SLIDER_STEPS
-                )
+                self.slider.setRange(_int(s_lo) if linear else 0, _int(s_hi) if linear else _SLIDER_STEPS)
                 self._direct = linear
             else:
                 assert isinstance(self.spin, QDoubleSpinBox)
-                self.spin.setDecimals(_decimals(lo, hi, self._step))
-                self.spin.setRange(lo, spin_hi)
-                self.spin.setSingleStep(self._step or (hi - lo) / 100)
+                decimals = self._decimals if self._decimals is not None else _decimals(s_lo, s_hi, self._step)
+                self.spin.setDecimals(decimals)
+                self.spin.setRange(lo, hi)
+                self.spin.setSingleStep(self._step or (s_hi - s_lo) / 100)
                 self.slider.setRange(0, _SLIDER_STEPS)
                 self._direct = False
         finally:
@@ -160,6 +222,8 @@ class SliderSpin(QWidget):
         return self._lo + f * (self._hi - self._lo)
 
     def _to_slider(self, value: float) -> None:
+        if not math.isfinite(value):
+            return
         value = min(max(value, self._lo), self._hi)
         if self._direct:
             pos = int(round(value))
@@ -176,7 +240,9 @@ class SliderSpin(QWidget):
         return self.spin.value()
 
     def set_value(self, value: float) -> None:
-        self.spin.setValue(int(round(value)) if self.integer else float(value))
+        if not math.isfinite(float(value)):
+            return  # pas un nombre (image contenant des NaN) : le réglage ne bouge pas
+        self.spin.setValue(_int(value) if self.integer else float(value))
 
     def _from_slider(self, _pos: int) -> None:
         if self._syncing:
@@ -184,12 +250,14 @@ class SliderSpin(QWidget):
         value = self._slider_value()
         if self._step and not self.integer:  # le curseur s'arrête sur les pas du réglage
             value = round(value / self._step) * self._step
+        before = self.value()
         self._syncing = True
         try:
             self.set_value(value)
         finally:
             self._syncing = False
-        self.changed.emit()
+        if self.value() != before:  # même valeur : pas de nouvel aperçu identique
+            self.changed.emit()
 
     def _from_spin(self, value: float) -> None:
         self._to_slider(float(value))
@@ -208,6 +276,7 @@ class ParamControl(QObject):
         self.name = spec.name
         self.label = nice_label(spec)
         self._pixel_size: float | None = None
+        self._data_range: tuple[float, float] | None = None  # valeurs de l'image (réglage « image »)
         self.equivalent: QLabel | None = None
         meta, kind = spec.meta, spec.type
         self._kind = "text"
@@ -230,8 +299,10 @@ class ParamControl(QObject):
             hi = meta.max if meta.max is not None else (1e9 if not integer else 10**9)
             bounded = meta.min is not None and meta.max is not None
             if bounded or meta.span == "image":
-                self.editor = SliderSpin(integer, lo if bounded else 0.0, hi if bounded else 255.0, meta.step)
-                if bounded:
+                self.editor = SliderSpin(integer, lo, hi, meta.step)
+                if meta.span == "image":  # en attendant de connaître l'image
+                    self.editor.set_slider_range(max(lo, 0.0), min(hi, 255.0))
+                elif bounded:
                     self.editor.set_slider_span(_handy_top(lo, hi, float(spec.default), meta.step, integer))
                 self.editor.set_value(spec.default)
                 self.editor.changed.connect(self._emit)
@@ -316,19 +387,33 @@ class ParamControl(QObject):
         """Adapte le réglage à l'image choisie : équivalent en µm, bornes d'un seuil."""
         self._pixel_size = pixel_size_um
         meta = self.spec.meta
+        self._data_range = None
         if meta.span == "image" and data_range is not None and isinstance(self.editor, SliderSpin):
             lo, hi = data_range
+            if not (math.isfinite(lo) and math.isfinite(hi)):  # image sans valeur finie : rien à adapter
+                self._update_equivalent()
+                return
+            self._data_range = (lo, hi)
             untouched = self.is_default
             self.editor.blockSignals(True)
             if integer_data and not self.editor.integer:
                 self.editor._step = 1.0
-            # le curseur parcourt les valeurs de l'image ; le champ accepte aussi 0 et les
-            # valeurs au-delà (remplir en blanc, seuil hors de l'image…)
-            self.editor._top = hi
-            self.editor.set_range(min(lo, 0.0), max(hi * 1.0001 + 1, 65535.0 if integer_data else hi + 1))
+            # le curseur parcourt les valeurs de l'image ; le champ accepte tout ce que l'outil
+            # accepte (noir négatif, seuil au-delà de l'image, valeur de remplissage…)
+            decimals = 0 if integer_data else _decimals(lo, hi, None)
+            self.editor._decimals = None if self.editor.integer else decimals
+            self.editor.set_slider_range(lo, hi)
             start = {"min": lo, "max": hi, "milieu": (lo + hi) / 2}.get(meta.start)
             if start is not None:
-                self._start = round(start) if integer_data else start
+                # arrondi au champ, sans écarter de valeur : vers le haut pour un maximum
+                scale = 10**decimals
+                if meta.start == "max":
+                    start = math.ceil(start * scale - 1e-9) / scale
+                elif meta.start == "min":
+                    start = math.floor(start * scale + 1e-9) / scale
+                else:
+                    start = round(start * scale) / scale
+                self._start = int(start) if self.spec.type is int else float(start)
                 if untouched:  # un réglage déjà modifié à la main n'est pas remplacé
                     self.editor.set_value(self._start)
             self.editor.blockSignals(False)
@@ -344,6 +429,26 @@ class ParamControl(QObject):
         um = float(self.value) * px
         text = f"{um:.3g} µm" if um < 1000 else f"{um / 1000:.3g} mm"
         self.equivalent.setText("≈ " + text.replace(".", ","))
+
+
+#: largeur de la colonne des noms, pour les listes et les textes (plus long : nom au-dessus)
+LABEL_WIDTH = 92
+
+
+def labelled(text: str, editor: QWidget) -> QWidget:
+    """Un champ précédé de son nom, dans une colonne de largeur fixe : tous les champs d'une
+    fiche commencent au même endroit. Un nom trop long passe au-dessus du champ."""
+    box = QWidget()
+    name = QLabel(text)
+    wide = name.sizeHint().width() > LABEL_WIDTH
+    lay: QVBoxLayout | QHBoxLayout = QVBoxLayout(box) if wide else QHBoxLayout(box)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(2 if wide else 8)
+    if not wide:
+        name.setFixedWidth(LABEL_WIDTH)
+    lay.addWidget(name)
+    lay.addWidget(editor, 0 if wide else 1)
+    return box
 
 
 class ParamForm(QWidget):
@@ -414,23 +519,30 @@ class ParamForm(QWidget):
         self._update_reset()
 
     def _add_row(self, form: QFormLayout, control: ParamControl) -> None:
+        """Une seule disposition pour tous les réglages : un nombre a son nom au-dessus de son
+        curseur ; une liste ou un texte a son nom à gauche, dans une colonne de largeur fixe ;
+        une case porte son nom. L'explication vient toujours en dessous."""
         box = QWidget()
         col = QVBoxLayout(box)
-        col.setContentsMargins(0, 0, 0, 0)
-        col.setSpacing(1)
-        line = QHBoxLayout()
-        line.setContentsMargins(0, 0, 0, 0)
-        line.setSpacing(6)
-        line.addWidget(control.editor, 1)
-        if control.equivalent is not None:
-            line.addWidget(control.equivalent)
-        col.addLayout(line)
+        col.setContentsMargins(0, 2, 0, 3)
+        col.setSpacing(2)
+        editor = control.editor
+        if isinstance(editor, QCheckBox):
+            col.addWidget(editor)
+        elif isinstance(editor, SliderSpin):
+            head = QHBoxLayout()
+            head.setContentsMargins(0, 0, 0, 0)
+            head.setSpacing(6)
+            head.addWidget(QLabel(control.label), 1)
+            if control.equivalent is not None:
+                head.addWidget(control.equivalent)
+            col.addLayout(head)
+            col.addWidget(editor)
+        else:
+            col.addWidget(labelled(control.label, editor))
         if control.spec.meta.description:
             col.addWidget(label(control.spec.meta.description, "faint"))
-        if isinstance(control.editor, QCheckBox):
-            form.addRow(box)  # la case porte déjà son nom
-        else:
-            form.addRow(control.label, box)
+        form.addRow(box)
 
     def _toggle_advanced(self, on: bool) -> None:
         self.advanced_box.setVisible(on)
@@ -452,9 +564,31 @@ class ParamForm(QWidget):
             if control.name in values:
                 try:
                     control.value = values[control.name]
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     pass
         self._update_reset()
+
+    def restore(self, values: dict[str, Any]) -> None:
+        """Reprend les réglages de la dernière utilisation de l'outil.
+
+        Un seuil mémorisé n'est repris que s'il tombe dans les valeurs de l'image choisie :
+        1800 retenu sur une image 16 bits n'a pas de sens sur une image 8 bits, où le réglage
+        garde alors la valeur proposée d'après l'image."""
+        kept = {}
+        for control in self.controls:
+            if control.name not in values:
+                continue
+            value = values[control.name]
+            if control.spec.meta.span == "image":
+                span = control._data_range
+                try:
+                    inside = span is not None and span[0] <= float(value) <= span[1]
+                except (TypeError, ValueError):
+                    inside = False
+                if not inside:
+                    continue
+            kept[control.name] = value
+        self.set_values(kept)
 
     def reset(self) -> None:
         for control in self.controls:

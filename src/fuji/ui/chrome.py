@@ -18,7 +18,7 @@ from qtpy.QtWidgets import (
 )
 
 from . import icons
-from .components import ToggleSwitch, icon_button, label, nav_button, separator
+from .components import ToggleSwitch, icon_button, label, nav_button, separator, shortcut
 from .theme import ThemeManager, palette
 
 #: Les deux espaces de travail : se servir du microscope, ou analyser les images prises.
@@ -165,8 +165,8 @@ class ModeSwitch(QFrame):
             self.buttons[key] = b
             lay.addWidget(b)
         tips = {
-            "microscope": "Régler le microscope, voir le live, prendre des images (Ctrl+1)",
-            "analyse": "Ouvrir les images prises, mesurer, analyser (Ctrl+2)",
+            "microscope": f"Régler le microscope, voir le live, prendre des images ({shortcut('Ctrl+1')})",
+            "analyse": f"Ouvrir les images prises, mesurer, analyser ({shortcut('Ctrl+2')})",
         }
         for key, tip in tips.items():
             self.buttons[key].setToolTip(tip)
@@ -236,14 +236,14 @@ class TopBar(QWidget):
         self.profile_combo.activated.connect(
             lambda i: self.profile_selected.emit(self.profile_combo.itemData(i))
         )
-        lay.addWidget(self.profile_combo)
+        lay.addWidget(self.profile_combo, 5)  # prend la place libre : le nom n'est pas tronqué
         manage = icon_button("edit", "Configurer les microscopes")
         manage.setFixedSize(34, 34)
         manage.clicked.connect(self.manage_profiles.emit)
         lay.addWidget(manage)
         self.manage = manage
         self.status = label("", "badge", wrap=False)
-        lay.addWidget(self.status)
+        lay.addWidget(self.status, 0, Qt.AlignmentFlag.AlignVCenter)
         lay.addStretch(1)
 
         self.acq_label = label("", "hint", wrap=False)
@@ -256,12 +256,12 @@ class TopBar(QWidget):
         self.live = QPushButton("Live")
         self.live.setObjectName("live")
         self.live.setCheckable(True)
-        self.live.setToolTip("Démarrer / arrêter le live (Ctrl+L)")
+        self.live.setToolTip(f"Démarrer / arrêter le live ({shortcut('Ctrl+L')})")
         self.live.setCursor(Qt.CursorShape.PointingHandCursor)
         self.live.toggled.connect(self.live_toggled.emit)
         self.capture = QPushButton("Capturer")
         self.capture.setObjectName("capture")
-        self.capture.setToolTip("Capturer une image avec ses métadonnées (Ctrl+K)")
+        self.capture.setToolTip(f"Capturer une image avec ses métadonnées ({shortcut('Ctrl+K')})")
         self.capture.setCursor(Qt.CursorShape.PointingHandCursor)
         self.capture.clicked.connect(self.capture_clicked.emit)
         lay.addWidget(self.live)

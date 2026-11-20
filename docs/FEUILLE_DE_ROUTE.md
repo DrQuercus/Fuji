@@ -238,11 +238,80 @@ des ROI sans aucun réglage.
 Limite connue : la mesure affichée à côté d'une forme est celle de son tracé ; le tableau
 compte les pixels entiers. Les deux peuvent différer d'une fraction de pour cent.
 
+## Version 1.1 (fait) — une interface harmonisée, et des défauts corrigés
+
+Retour d'essai : « encore quelques problèmes », et une interface « pas très pro ». Méthode :
+un tour de tous les écrans en captures (thème sombre et clair, petite fenêtre), puis trois
+relectures indépendantes — le code de la 1.0, les gestes de souris simulés (dessin, glisser,
+clavier), et la cohérence de l'interface.
+
+**Interface**
+
+- [x] **Un seul style de section** : des cartes à icône partout (Contrôle, Acquisition,
+      Assistants, Calques, Matériel, Préférences), au lieu de trois styles mélangés
+- [x] **Plus rien ne dépasse** : les panneaux Assistants et Préférences étaient coupés au
+      bord droit, la barre sous l'image aussi dans une petite fenêtre. Les rangées de boutons
+      passent à la ligne ; un test vérifie que chaque panneau tient dans sa place
+- [x] **Assistants** : une liste, puis la page de l'assistant choisi (comme les outils
+      d'analyse), au lieu de cinq onglets trop larges
+- [x] **Calques** : un panneau de Fuji, en français (œil, nom, monter, descendre, renommer,
+      enregistrer, opacité, fusion, contours). Les réglages bruts de napari, en anglais, ne
+      sont plus montrés qu'en mode expert
+- [x] **Acquisition** : chaque option (série dans le temps, pile Z, mosaïque, autofocus) est
+      une carte avec son interrupteur
+- [x] **Fiches d'outils** : une seule disposition (libellé, curseur et champ ; listes alignées)
+- [x] **Nombres à la française partout** : virgule dans les champs comme dans les textes
+      (« 10,00 ms », « 0,29 µm/px »). Un point tapé au clavier vaut une virgule : sur un Mac
+      en français, « 12.5 » donnait 125
+- [x] **Textes** : « 1 image », « 2 canaux » (plus de « (s) ») ; « configuration » au lieu de
+      « profil » ; « … » ; raccourcis écrits comme sur le clavier (⌘K sur un Mac) ; messages
+      d'erreur qui disent ce qui n'a pas marché
+- [x] **Volet des résultats** : barre de titre de Fuji (Cumuler, détacher, fermer), onglets
+      à croix discrète ; il se referme avec son dernier tableau
+- [x] Vue d'Analyse vide : une invitation à ouvrir une image ; position du curseur lisible
+      (« x 34 · y 12 — 1200 ») ; états manquants du thème (boutons désactivés, survol, cochés)
+
+**Défauts corrigés**
+
+- [x] **Trajet et Angle** étaient des tracés à main levée : ce sont maintenant des lignes
+      brisées, point par point. L'outil de dessin actif reste enfoncé
+- [x] **Définir l'échelle** d'après une ligne tracée : la ligne quittait la barre mesurée et
+      les mesures suivantes étaient fausses (quatre fois trop dans l'essai). Les formes et les
+      points suivent l'image ; l'unité affichée à côté d'une forme est celle de l'image regardée
+- [x] **Étiquettes du dessin** : la mesure suit vraiment la souris pendant le tracé (elle
+      affichait « None ») ; une forme collée (Ctrl+V) prend son numéro ; un simple clic ne
+      laisse plus de forme invisible ; les calques « ROI » et « Points » gardent leur nom
+- [x] **Seuils** : un seuil retenu au-dessus de 255 revenait à 255 ; les bornes proposées
+      valent pour toute la pile et non le seul plan affiché ; une image avec des cases vides
+      (NaN) n'empêche plus d'ouvrir la fiche ; les curseurs parcourent les valeurs de
+      l'image, les champs acceptent tout ce que l'outil accepte
+- [x] **Appliquer le contraste aux pixels** donne exactement ce que montre l'écran (un noir
+      négatif devenait 0, les bornes étaient arrondies) ; palette inversée prise en compte
+- [x] **Niveau du blanc** d'une image lu sur tous ses pixels (un sur seize auparavant) ; un
+      résultat s'affiche avec le contraste de son image de départ, pour que l'effet d'un
+      réglage se voie
+- [x] **Aperçu en direct** : il suit le plan affiché d'une pile, se met à jour sans
+      clignoter, signale qu'il calcule ; « Exécuter » cliqué pendant un aperçu ne lance plus
+      un autre outil ; un résultat qui arrive après la fermeture de son image est abandonné
+- [x] **Histogramme du contraste** : une borne tirée hors du cadre ne s'emballe plus ; un
+      double-clic (échelle linéaire / logarithmique) ne déplace plus de borne ; PNG avec
+      transparence : la couche alpha ne fausse plus l'histogramme ni « Auto »
+- [x] **Tableaux** : le tri porte sur tout le tableau (et plus sur les 2000 lignes
+      affichées), les numéros de ligne restent justes après un changement de décimales, la
+      copie et l'export suivent l'ordre affiché ; « Cumuler » ne mélange plus µm² et px²
+- [x] **Mesurer les ROI** échouait dès qu'une ligne passait dans une zone uniforme
+- [x] **Curseurs au clavier** : une flèche = un pas du réglage (il fallait 20 à 180 appuis)
+- [x] « Redimensionner » : 0,25 devenait 0,3 ; préférences abîmées bornées au chargement
+
+Limites connues : un aperçu long ne peut pas être interrompu (le suivant le remplace) ; la
+mesure à côté d'une forme à cheval sur le bord de l'image compte la partie hors de l'image,
+le tableau non.
+
 ## Prochaines étapes
 
 ### 1. Valider sur ton matériel (priorité)
 
-Tout ce qui précède est vérifié par environ 290 tests automatiques, mais **sur du
+Tout ce qui précède est vérifié par environ 370 tests automatiques, mais **sur du
 matériel simulé**. Voici ce qui n'a jamais pu être essayé et reste à valider :
 
 - [x] **La vraie caméra** : la E3ISPM08300KPD se connecte et l'image arrive (Mac)

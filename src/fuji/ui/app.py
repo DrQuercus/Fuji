@@ -6,7 +6,9 @@ import logging
 import sys
 from pathlib import Path
 
-from qtpy.QtWidgets import QApplication, QMessageBox
+from qtpy.QtCore import QEvent, QObject, Qt
+from qtpy.QtGui import QKeyEvent
+from qtpy.QtWidgets import QAbstractSpinBox, QApplication, QMessageBox
 
 from fuji.core.microscope import Microscope
 from fuji.core.profile import user_profile_dir
@@ -56,12 +58,33 @@ def install_error_handler() -> None:
     sys.excepthook = hook
 
 
+class DecimalPointFilter(QObject):
+    """Dans un champ de nombre, le point tapé au clavier vaut une virgule.
+
+    Sans cela, Qt l'ignore en français : taper « 12.5 » donnait 125 — et le pavé numérique
+    d'un clavier français envoie justement un point."""
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.KeyPress and event.text() == ".":
+            field = obj if isinstance(obj, QAbstractSpinBox) else obj.parent()
+            if isinstance(field, QAbstractSpinBox) and field.locale().decimalPoint() == ",":
+                comma = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Comma, event.modifiers(), ",")
+                QApplication.sendEvent(obj, comma)
+                return True
+        return False
+
+
 def install_french(app: QApplication) -> None:
     """Boutons et dialogues standard de Qt en français (« Oui », « Non », « Annuler »…)."""
     from qtpy.QtCore import QLibraryInfo, QLocale, QTranslator
 
     if getattr(app, "_fuji_translator", None) is not None:
         return
+    # nombres à la française partout (« 12,5 »), quel que soit le réglage de l'ordinateur :
+    # champs de saisie et textes affichés suivent la même convention
+    QLocale.setDefault(QLocale(QLocale.Language.French, QLocale.Country.France))
+    app._fuji_decimal = DecimalPointFilter(app)  # type: ignore[attr-defined]
+    app.installEventFilter(app._fuji_decimal)  # type: ignore[attr-defined]
     translator = QTranslator(app)
     try:
         folder = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)

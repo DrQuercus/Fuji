@@ -51,7 +51,6 @@ class FlatFieldWidget(QWidget):
         self.take_btn.clicked.connect(lambda: self.take("flat"))
         self.more_btn = icon_button("gear", "Noir, effacer la référence")
         self.more_btn.setFixedWidth(34)
-        self.more_btn.setStyleSheet("QPushButton::menu-indicator { image: none; width: 0px; }")
         menu = QMenu(self.more_btn)
         menu.addAction("Prendre le noir (lumière coupée)…", lambda: self.take("dark"))
         self.clear_action = menu.addAction("Effacer cette référence", self.clear)
@@ -139,7 +138,7 @@ class FlatFieldWidget(QWidget):
             self.status.setText(f"Mesure en cours… {done}/{total} images (ne touchez à rien)")
 
     def _failed(self, exc: Exception) -> None:
-        QMessageBox.warning(self, TITLE, str(exc))
+        QMessageBox.warning(self, TITLE, f"L'image de référence n'a pas pu être prise : {exc}")
 
     def _measured(self, candidate: Candidate) -> None:
         if candidate.warnings:

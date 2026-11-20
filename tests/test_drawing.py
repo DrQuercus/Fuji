@@ -76,6 +76,15 @@ def window(qtbot, tmp_path):
     return win
 
 
+def _settle(qtbot, window):
+    """Attend que les étiquettes du dessin soient à jour : le délai dépend de la machine (plus
+    long quand d'autres fenêtres ont été ouvertes avant dans le même programme)."""
+    styler = window.analysis.drawing
+    qtbot.wait(10)
+    qtbot.waitUntil(lambda: not styler._timer.isActive(), timeout=5000)
+    qtbot.wait(10)
+
+
 def _image(window, value=200, name="lame"):
     layer = window.viewer.add_image(np.full((200, 300), value, np.uint8), name=name)
     layer.contrast_limits = (0, 255)
@@ -94,7 +103,7 @@ def test_shapes_show_numbers_and_measures_and_are_counted(window, qtbot):
     roi.add_rectangles(np.array([[10, 10], [10, 50], [40, 50], [40, 10]], float))
     roi.add_lines(np.array([[0, 0], [30, 40]], float))
     roi.add_paths(np.array([[0, 10], [0, 0], [10, 0]], float))
-    qtbot.wait(120)
+    _settle(qtbot, window)
     assert roi.features["texte"].tolist() == ["1 : 300 µm²", "2 : 25 µm", "3 : 90°"]
     assert list(roi.text.values) == ["1 : 300 µm²", "2 : 25 µm", "3 : 90°"] and roi.text.visible
     assert panel.roi_count.text() == "3 formes" and not panel.roi_count.isHidden()
@@ -102,17 +111,17 @@ def test_shapes_show_numbers_and_measures_and_are_counted(window, qtbot):
     data = list(roi.data)
     data[1] = np.array([[0, 0], [60, 80]], float)
     roi.data = data
-    qtbot.wait(120)
+    _settle(qtbot, window)
     assert roi.features["texte"].tolist()[1] == "2 : 50 µm"
 
     panel.set_tool("points", "add")
     points = window.viewer.layers["Points"]
     for y, x in ((20, 30), (50, 60)):
         points.add(np.array([[float(y), float(x)]]))
-    qtbot.wait(120)
+    _settle(qtbot, window)
     assert list(points.text.values) == ["1", "2"] and panel.roi_count.text() == "3 formes · 2 points"
     panel.clear_rois()
-    qtbot.wait(120)
+    _settle(qtbot, window)
     assert panel.roi_count.isHidden() and len(roi.features) == 0
 
 
@@ -130,7 +139,7 @@ def test_drawing_settings_restyle_what_is_drawn_and_persist(window, qtbot):
     panel.set_tool("points", "add")
     points = window.viewer.layers["Points"]
     points.add(np.array([[20.0, 30.0]]))
-    qtbot.wait(120)
+    _settle(qtbot, window)
 
     def rgb(color):
         return tuple(round(float(c), 2) for c in color[:3])
@@ -173,8 +182,8 @@ def test_extra_drawing_tools(window):
     _image(window)
     expected = {
         "roi_free": "add_polygon_lasso",
-        "roi_path": "add_path",
-        "roi_angle": "add_path",
+        "roi_path": "add_polyline",
+        "roi_angle": "add_polyline",
         "roi_edit": "direct",
         "roi_rect": "add_rectangle",
     }

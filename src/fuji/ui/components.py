@@ -6,7 +6,7 @@ from collections.abc import Iterable, Sequence
 from typing import Any
 
 from qtpy.QtCore import Property, QPropertyAnimation, QRectF, QSize, Qt, Signal
-from qtpy.QtGui import QColor, QPainter
+from qtpy.QtGui import QColor, QKeySequence, QPainter
 from qtpy.QtWidgets import (
     QAbstractButton,
     QButtonGroup,
@@ -26,6 +26,7 @@ from qtpy.QtWidgets import (
 )
 
 from . import icons
+from .flow import FlowLayout
 from .theme import ThemeManager, palette
 
 
@@ -84,8 +85,8 @@ class Card(QFrame):
                 head.addWidget(ic)
             t = QLabel(title)
             t.setObjectName("CardTitle")
-            head.addWidget(t)
-            head.addStretch(1)
+            t.setWordWrap(True)  # un titre long passe à la ligne au lieu d'élargir le panneau
+            head.addWidget(t, 1)
             self.header = head
             self.body.addLayout(head)
             if subtitle:
@@ -96,6 +97,24 @@ class Card(QFrame):
             self.body.addWidget(widget, stretch)
         if layout is not None:
             self.body.addLayout(layout)
+
+
+class OptionCard(Card):
+    """Carte d'une option que l'on active par un interrupteur placé dans son titre : son
+    contenu n'apparaît qu'une fois l'option activée (le panneau reste court)."""
+
+    def __init__(self, title: str, icon_name: str | None = None, parent: QWidget | None = None) -> None:
+        super().__init__(title, icon_name=icon_name, parent=parent)
+        self.toggle = ToggleSwitch()
+        self.toggle.setToolTip(f"Activer « {title} »")
+        self.header.addWidget(self.toggle)
+        self.content = QWidget()
+        self.content_lay = QVBoxLayout(self.content)
+        self.content_lay.setContentsMargins(0, 0, 0, 0)
+        self.content_lay.setSpacing(6)
+        self.body.addWidget(self.content)
+        self.content.setVisible(False)
+        self.toggle.toggled.connect(self.content.setVisible)
 
 
 class PanelHeader(QWidget):
@@ -129,6 +148,21 @@ def hbox(*widgets: QWidget | None, spacing: int = 8, stretch: bool = True, margi
             lay.addWidget(child)
     if stretch and None not in widgets:
         lay.addStretch(1)
+    return w
+
+
+def flow(*widgets: QWidget, spacing: int = 6) -> QWidget:
+    """Rangée qui passe à la ligne quand la place manque (des boutons dans un panneau
+    étroit) : rien n'est jamais coupé au bord."""
+    w = QWidget()
+    w.setObjectName("Row")
+    lay = FlowLayout(w, spacing=spacing, line_spacing=spacing)
+    lay.setContentsMargins(0, 0, 0, 0)
+    for child in widgets:
+        lay.addWidget(child)
+    policy = w.sizePolicy()
+    policy.setHeightForWidth(True)
+    w.setSizePolicy(policy)
     return w
 
 
@@ -166,6 +200,12 @@ def retheme(root: QWidget) -> None:
 
 
 # ------------------------------------------------------------------ boutons
+def shortcut(keys: str) -> str:
+    """Un raccourci écrit comme sur le clavier de l'ordinateur : « ⌘K » sur un Mac,
+    « Ctrl+K » ailleurs (les infobulles l'annonçaient toujours en « Ctrl+… »)."""
+    return QKeySequence(keys).toString(QKeySequence.SequenceFormat.NativeText)
+
+
 def icon_button(
     icon_name: str,
     tooltip: str = "",

@@ -152,14 +152,20 @@ def test_missing_inputs_say_what_to_do(window, monkeypatch):
 
 
 def test_cursor_coordinates_no_longer_erase_messages(window):
-    class Event:
-        value = "[12, 34]: 1200"
+    import numpy as np
 
+    class Event:
+        value = "[12, 34]: 1200"  # le texte brut de napari : Fuji écrit le sien
+
+    layer = window.viewer.add_image(np.full((40, 60), 1200, np.uint16), name="image")
+    window.set_mode("analyse")
+    window.viewer.cursor.position = (12.0, 34.0)
     window.notify("capture_001 enregistrée")
     window._on_status(Event())
     assert window.statusBar().currentMessage() == "capture_001 enregistrée"
-    assert window.cursor_label.text() == "[12, 34]: 1200"
-    Event.value = "Ready"  # le « Ready » de napari n'est pas affiché
+    assert window.cursor_label.text() == "x 34 · y 12 — 1200"
+    window.viewer.layers.remove(layer)  # plus d'image : plus de coordonnées (ni « Ready » de napari)
+    Event.value = "Ready"
     window._on_status(Event())
     assert window.cursor_label.text() == ""
     window.warn("La caméra n'envoie plus d'images")

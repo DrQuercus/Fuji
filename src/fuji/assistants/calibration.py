@@ -22,6 +22,8 @@ import numpy as np
 from scipy import ndimage as ndi
 from scipy import signal
 
+from fuji.text import number
+
 from .focus import to_gray
 
 
@@ -42,8 +44,8 @@ class MicrometerCalibration:
     @property
     def summary(self) -> str:
         return (
-            f"{self.pixel_size_um:.4f} µm/pixel ({self.n_lines} traits, période "
-            f"{self.period_px:.2f} px, ±{self.relative_uncertainty * 100:.2f} %)"
+            f"{number(self.pixel_size_um, 4)} µm/pixel ({self.n_lines} traits, période "
+            f"{number(self.period_px, 2)} px, ±{number(self.relative_uncertainty * 100, 2)} %)"
         )
 
 

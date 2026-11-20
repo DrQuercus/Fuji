@@ -125,7 +125,9 @@ def test_threshold_sliders_span_the_values_of_the_image(window, qtbot):
     panel = window.analysis
     panel.select_operation("Seuil manuel")
     lower, upper = (next(c for c in panel._params if c.name == n) for n in ("lower", "upper"))
-    assert (lower.editor._lo, lower.editor._hi) == (0.0, float(data.max()))
+    # le curseur parcourt les valeurs de l'image ; le champ accepte aussi ce qui en sort
+    assert (lower.editor._lo, lower.editor._hi) == (float(data.min()), float(data.max()))
+    assert lower.editor.spin.minimum() <= 0 and lower.editor.spin.maximum() >= 65535
     assert upper.value == float(data.max()) and lower.value == pytest.approx((300 + data.max()) / 2, abs=2)
     assert not panel._params.reset_btn.isEnabled()  # ce sont les valeurs de départ pour cette image
     lower.value = 1000.0

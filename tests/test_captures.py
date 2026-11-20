@@ -58,5 +58,5 @@ def test_thumbnails_and_summaries():
     small = thumbnail(np.zeros((2160, 3840, 3), np.uint16) + np.arange(3840, dtype=np.uint16)[:, None])
     assert small.dtype == np.uint8 and max(small.shape[:2]) <= 192 and small.shape[2] == 3
     assert thumbnail(np.ones((5, 64, 64), np.uint16)).shape == (64, 64)  # pile : plan du milieu
-    assert describe({"exposure_ms": 0.5, "note": "panorama de 4 champs"}) == "0.5 ms · panorama de 4 champs"
+    assert describe({"exposure_ms": 0.5, "note": "panorama de 4 champs"}) == "0,5 ms · panorama de 4 champs"
     assert describe(None) == ""

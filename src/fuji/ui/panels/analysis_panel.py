@@ -56,6 +56,7 @@ from superqt.utils import create_worker
 from fuji.analysis import Image, Labels, Points, Rois, Table, list_operations
 from fuji.analysis.guide import GUESS, RECIPES, Recipe, help_of
 from fuji.analysis.imagej import open_in_fiji
+from fuji.analysis.ops.adjust import WHITE_KEY, white_level
 from fuji.analysis.registry import Operation, combine_planes
 
 from .. import documents
@@ -63,12 +64,12 @@ from ..components import button, icon_button, label, separator
 from ..drawing import DrawingStyler
 from ..flow import FlowLayout
 from ..prefs import settings
-from .param_form import ParamForm
+from .param_form import ParamForm, labelled
 from .tool_menu import RecipePage, ToolMenu
 
 _NONE = "(aucune)"
-ROI_LAYER = "ROI"
-POINTS_LAYER = "Points"
+ROI_LAYER = documents.ROI_LAYER
+POINTS_LAYER = documents.POINTS_LAYER
 PREVIEW_PREFIX = documents.PREVIEW_PREFIX
 _LAYER_TYPES = {Image: ImageLayer, Labels: LabelsLayer, Rois: ShapesLayer, Points: PointsLayer}
 _INPUT_LABELS = {
@@ -103,12 +104,17 @@ _TOOLS = (
     ("roi_polygon", "Polygone (double-clic pour fermer)", "shapes", "add_polygon"),
     ("roi_free", "Main levée : contour tracé à la souris, bouton enfoncé", "shapes", "add_polygon_lasso"),
     ("roi_line", "Ligne (profil, distance)", "shapes", "add_line"),
-    ("roi_path", "Trajet : ligne brisée, un clic par point (double-clic pour finir)", "shapes", "add_path"),
+    (
+        "roi_path",
+        "Trajet : ligne brisée, un clic par point (double-clic pour finir)",
+        "shapes",
+        "add_polyline",
+    ),
     (
         "roi_angle",
         "Angle : trois clics, le sommet de l'angle en deuxième (double-clic au troisième)",
         "shapes",
-        "add_path",
+        "add_polyline",
     ),
     ("roi_point", "Points (comptage)", "points", "add"),
     ("pointer", "Sélectionner et déplacer les formes (Suppr : effacer la forme choisie)", "shapes", "select"),
@@ -123,6 +129,55 @@ def _pixel_size(layer: Any) -> float | None:
     if px is None and float(layer.scale[-1]) != 1.0:
         px = float(layer.scale[-1])
     return px
+
+
+#: au-delà, les valeurs extrêmes d'une pile sont lues sur le plan affiché seulement
+_RANGE_LIMIT = 200_000_000
+
+
+def value_range(layer: Any, viewer: ViewerModel | None = None) -> tuple[float, float] | None:
+    """Valeurs extrêmes de l'image, exactes et sans les NaN : celles de toute la pile quand
+    elle tient en mémoire (un seuil proposé ne doit écarter aucun pixel d'aucun plan), sinon
+    celles du plan affiché. ``None`` si l'image n'a aucune valeur finie."""
+    data = layer.data
+    if int(np.prod(data.shape)) > _RANGE_LIMIT and viewer is not None:
+        data, _ = displayed_plane(layer, viewer)
+    values = np.asarray(data)
+    if _is_rgb(layer) and values.shape[-1] == 4:
+        values = values[..., :3]  # la transparence n'est pas une valeur de l'image
+    if values.dtype.kind == "f":
+        if not np.isfinite(values).any():
+            return None
+        return float(np.nanmin(np.where(np.isfinite(values), values, np.nan))), float(
+            np.nanmax(np.where(np.isfinite(values), values, np.nan))
+        )
+    if not values.size:
+        return None
+    return float(values.min()), float(values.max())
+
+
+def layer_white(layer: Any) -> float | None:
+    """Le « blanc » d'un calque : celui de la caméra quand on la connaît (4095 en 12 bits),
+    sinon celui de toute la pile, pour que chaque plan soit traité à la même échelle. ``None`` :
+    une image seule, qui le dira elle-même."""
+    data = layer.data
+    bits = layer.metadata.get("bit_depth")
+    try:
+        if bits and np.dtype(data.dtype).kind == "u" and 0 < int(bits) <= np.dtype(data.dtype).itemsize * 8:
+            return float(2 ** int(bits) - 1)
+    except (TypeError, ValueError):
+        pass
+    if int(data.ndim) - (3 if _is_rgb(layer) else 2) <= 0:
+        return None
+    cached = layer.metadata.get("_fuji_white")
+    if cached and cached[0] == id(data):
+        return float(cached[1])
+    if int(np.prod(data.shape)) > _RANGE_LIMIT:
+        return None
+    values = np.asarray(data)
+    value = white_level(values[..., :3] if _is_rgb(layer) else values)
+    layer.metadata["_fuji_white"] = (id(data), value)
+    return value
 
 
 def _is_rgb(layer: Any) -> bool:
@@ -156,6 +211,9 @@ def displayed_plane(layer: Any, viewer: ViewerModel) -> tuple[np.ndarray, str]:
 def layer_to_image(layer: Any, viewer: ViewerModel | None = None) -> Image:
     """Image d'analyse à partir d'un calque. Avec ``viewer`` : seulement le plan affiché."""
     md, rgb = dict(layer.metadata), _is_rgb(layer)
+    white = layer_white(layer)
+    if white:
+        md[WHITE_KEY] = white
     if viewer is None:
         return Image(np.asarray(layer.data), _pixel_size(layer), layer.name, md, rgb)
     data, suffix = displayed_plane(layer, viewer)
@@ -207,6 +265,37 @@ def layer_to_points(layer: Any, reference: Any | None = None, viewer: ViewerMode
     return Points(_to_reference_pixels(layer, data[keep], reference), px, layer.name)
 
 
+def _same_kind(layer: Any, item: Any) -> bool:
+    """Ce résultat peut-il remplacer sur place les pixels de ce calque d'aperçu ?"""
+    if isinstance(item, Labels):
+        ok = isinstance(layer, LabelsLayer)
+    elif isinstance(item, Image):
+        ok = isinstance(layer, ImageLayer) and bool(layer.rgb) == bool(item.is_rgb)
+    else:
+        return False
+    data = np.asarray(item.data)
+    return ok and tuple(layer.data.shape) == tuple(data.shape) and layer.data.dtype == data.dtype
+
+
+def _display_like(layer: Any, like: Any | None) -> None:
+    """Donne à une image de résultat les réglages d'affichage de l'image traitée, quand elles
+    sont de même nature (même type de pixels, toutes deux en couleur ou en gris)."""
+    if not isinstance(like, ImageLayer) or not isinstance(layer, ImageLayer):
+        return
+    if bool(like.rgb) != bool(layer.rgb) or like.data.dtype != layer.data.dtype:
+        return
+    try:
+        lo, hi = (float(v) for v in like.contrast_limits)
+        r_lo, r_hi = layer.contrast_limits_range
+        layer.contrast_limits_range = (min(lo, r_lo), max(hi, r_hi))
+        layer.contrast_limits = (lo, hi)
+        layer.gamma = float(like.gamma)
+        if not layer.rgb:
+            layer.colormap = like.colormap
+    except Exception:  # réglage refusé par napari : l'affichage automatique reste
+        pass
+
+
 def run_on_planes(op: Operation, plane_inputs: list[list[Any]], params: dict[str, Any]) -> list[Any]:
     """Applique une opération à chaque plan (exécuté dans un thread de travail)."""
     return [op.func(*inputs, **params) for inputs in plane_inputs]
@@ -224,9 +313,11 @@ class AnalysisPanel(QWidget):
         self._inputs: dict[str, QComboBox] = {}
         self._params = ParamForm()
         self._params.changed.connect(self._schedule_preview)
+        viewer.dims.events.current_step.connect(self._schedule_preview)  # autre plan d'une pile
         self._busy = False
         self._preview_pending = False
         self._run_pending = False
+        self._pending_op: Operation | None = None
         self._recipe: Recipe | None = None
         self._step = 0
         self._done: set[int] = set()
@@ -241,12 +332,14 @@ class AnalysisPanel(QWidget):
         tools.setContentsMargins(0, 0, 0, 0)
         tools.addWidget(label("Dessiner :", "hint", wrap=False))
         self.tool_buttons: dict[str, QPushButton] = {}
+        self._tool = "move"  # l'outil actif (clé de son bouton)
         for icon_name, tip, kind, mode in _TOOLS:
-            b = icon_button(icon_name, tip)
+            b = icon_button(icon_name, tip, checkable=True)
             b.setFixedWidth(_TOOL_WIDTH)
-            b.clicked.connect(lambda _=False, k=kind, m=mode: self.set_tool(k, m))
+            b.clicked.connect(lambda _=False, k=kind, m=mode, n=icon_name: self.set_tool(k, m, n))
             tools.addWidget(b)
             self.tool_buttons[icon_name] = b
+        self.tool_buttons["move"].setChecked(True)
         clear = icon_button("trash", "Effacer toutes les ROI et tous les points")
         clear.clicked.connect(self.clear_rois)
         clear.setFixedWidth(_TOOL_WIDTH)
@@ -256,7 +349,6 @@ class AnalysisPanel(QWidget):
         self.drawing_btn = icon_button(
             "gear", "Réglages du dessin : couleur, épaisseur, remplissage, numéros, mesures sur l'image"
         )
-        self.drawing_btn.setStyleSheet("QPushButton::menu-indicator { image: none; width: 0px; }")
         self.drawing_menu = self.drawing.build_menu(self.drawing_btn)
         self.drawing_btn.setMenu(self.drawing_menu)
         self.drawing_btn.setFixedWidth(_TOOL_WIDTH)
@@ -282,7 +374,7 @@ class AnalysisPanel(QWidget):
         self.menu.recipe_chosen.connect(self.open_recipe)
         self.search = self.menu.search
         mlay.addWidget(self.menu)
-        fiji = QPushButton("Ouvrir le calque sélectionné dans Fiji")
+        fiji = button("Ouvrir le calque sélectionné dans Fiji")
         fiji.clicked.connect(self._open_in_fiji)
         mlay.addWidget(fiji)
 
@@ -349,7 +441,11 @@ class AnalysisPanel(QWidget):
         self.compare_btn.released.connect(lambda: self._set_preview_visible(True))
         self.preview_opacity = QSlider(Qt.Orientation.Horizontal)
         self.preview_opacity.setRange(10, 100)
-        self.preview_opacity.setValue(int(settings().value("analysis/preview_opacity", 100, type=int)))
+        try:
+            opacity = int(settings().value("analysis/preview_opacity", 100, type=int))
+        except (TypeError, ValueError):
+            opacity = 100
+        self.preview_opacity.setValue(opacity)
         self.preview_opacity.setMaximumWidth(110)
         self.preview_opacity.setToolTip("Opacité de l'aperçu (un masque à 50 % laisse voir l'image dessous)")
         self.preview_opacity.valueChanged.connect(self._preview_opacity_changed)
@@ -369,7 +465,7 @@ class AnalysisPanel(QWidget):
         policy.setHeightForWidth(True)
         options_box.setSizePolicy(policy)
         olay.addWidget(options_box)
-        self.run_btn = QPushButton("Exécuter")
+        self.run_btn = button("Exécuter")
         self.run_btn.setObjectName("primary")
         self.run_btn.clicked.connect(self._run)
         olay.addWidget(self.run_btn)
@@ -427,19 +523,54 @@ class AnalysisPanel(QWidget):
             layer = self.viewer.add_points(face_color="#ffd400", border_color="#000000", size=12, **common)
         if ref is not None:
             layer.metadata["pixel_size_um"] = ref.metadata.get("pixel_size_um")
+        layer.events.mode.connect(self._mode_changed)
         return layer
 
-    def set_tool(self, kind: str, mode: str) -> None:
-        """Passe en mode dessin (rectangle, ellipse, ligne, points...) sur le calque voulu."""
+    def set_tool(self, kind: str, mode: str, name: str | None = None) -> None:
+        """Passe en mode dessin (rectangle, ellipse, ligne, points...) sur le calque voulu.
+        ``name`` : le bouton de l'outil, quand deux outils partagent un mode (trajet, angle)."""
         if not kind:  # retour à l'outil normal : déplacer / zoomer
             for layer in self.viewer.layers:
                 if isinstance(layer, (ShapesLayer, PointsLayer)):
                     layer.mode = "pan_zoom"
+            self._show_tool("move")
             return
         layer = self._drawing_layer(kind)
+        if self.viewer.dims.ndisplay != 2:
+            self.viewer.dims.ndisplay = 2  # on ne dessine pas dans la vue en volume
+        layer.visible = True  # un calque caché par son œil ne laisserait rien dessiner
         self.viewer.layers.selection.active = layer
         layer.mode = mode
+        self._show_tool(name or next((n for n, _t, k, m in _TOOLS if (k, m) == (kind, mode)), "move"))
         self.message.emit("Dessinez sur l'image ; l'outil « déplacer » redonne la main à la souris")
+
+    def _show_tool(self, name: str) -> None:
+        """Coche le bouton de l'outil actif (un seul à la fois)."""
+        self._tool = name
+        for key, b in self.tool_buttons.items():
+            b.setChecked(key == name)
+
+    def _mode_changed(self, event: Any) -> None:
+        """Le mode d'un calque de dessin a changé sans passer par nos boutons (touches E, P, L,
+        S, Z… de napari, changement de section) : la rangée d'outils le reflète."""
+        layer = getattr(event, "source", None)
+        if layer is None or layer.name not in (ROI_LAYER, POINTS_LAYER):
+            return
+        mode = str(layer.mode)
+        kind = "shapes" if isinstance(layer, ShapesLayer) else "points"
+        if mode == "pan_zoom":
+            others = [
+                ly
+                for ly in self.viewer.layers
+                if ly is not layer and ly.name in (ROI_LAYER, POINTS_LAYER) and str(ly.mode) != "pan_zoom"
+            ]
+            if not others:
+                self._show_tool("move")
+            return
+        current = next((t for t in _TOOLS if t[0] == self._tool), None)
+        if current is not None and (current[2], current[3]) == (kind, mode):
+            return  # déjà le bon bouton (trajet ou angle : même mode)
+        self._show_tool(next((n for n, _t, k, m in _TOOLS if (k, m) == (kind, mode)), self._tool))
 
     def leave(self) -> None:
         """En quittant la section : la souris redevient « déplacer / zoomer » et l'aperçu en
@@ -460,6 +591,7 @@ class AnalysisPanel(QWidget):
         for name in (ROI_LAYER, POINTS_LAYER):
             if name in self.viewer.layers:
                 layer = self.viewer.layers[name]
+                layer.selected_data = set()  # sinon napari garde une sélection de points disparus
                 layer.data = [] if isinstance(layer, ShapesLayer) else np.zeros((0, layer.ndim))
 
     # ---------------------------------------------------------------- pages
@@ -632,14 +764,15 @@ class AnalysisPanel(QWidget):
             combo = QComboBox()
             combo.currentTextChanged.connect(self._input_changed)
             self._inputs[spec.name] = combo
-            self.form.addRow(_INPUT_LABELS.get(spec.name, spec.name), combo)
+            self.form.addRow(labelled(_INPUT_LABELS.get(spec.name, spec.name), combo))
         self.form.addRow(self._params)
         self._params.build(list(op.params), expert=self.expert)
-        # comme dans ImageJ : un outil garde les réglages de sa dernière utilisation
+        self._refresh_inputs()  # choisit l'image : les seuils prennent ses valeurs
+        # comme dans ImageJ, un outil garde les réglages de sa dernière utilisation — repris
+        # une fois l'image connue, sinon un seuil au-dessus de 255 était ramené à 255
         self._params.blockSignals(True)
-        self._params.set_values(self._remembered(op))
+        self._params.restore(self._remembered(op))
         self._params.blockSignals(False)
-        self._refresh_inputs()
 
     def _refresh_inputs(self, *_: Any) -> None:
         if self._op is None:
@@ -705,7 +838,7 @@ class AnalysisPanel(QWidget):
 
     def _update_context(self, primary: Any | None) -> None:
         """Adapte les réglages à l'image choisie : équivalent en µm des longueurs en pixels,
-        bornes des seuils (du pixel le plus sombre au plus clair du plan affiché)."""
+        bornes des seuils (du pixel le plus sombre au plus clair de l'image, pile comprise)."""
         if primary is None:
             self._params.set_context(None, None)
             return
@@ -713,10 +846,7 @@ class AnalysisPanel(QWidget):
         integer = np.issubdtype(np.dtype(primary.data.dtype), np.integer)
         if any(c.spec.meta.span == "image" for c in self._params):
             try:
-                plane, _ = displayed_plane(primary, self.viewer)
-                step = max(1, int(np.sqrt(plane.shape[0] * plane.shape[1] / 250_000)))
-                sample = np.asarray(plane[::step, ::step])
-                data_range = (float(sample.min()), float(sample.max()))
+                data_range = value_range(primary, self.viewer)
             except Exception:  # calque en cours de changement
                 data_range = None
         self._params.blockSignals(True)
@@ -812,6 +942,7 @@ class AnalysisPanel(QWidget):
             return
         if self._busy:  # un aperçu se calcule : « Exécuter » partira dès qu'il aura fini
             self._run_pending = True
+            self._pending_op = self._op
             self.run_btn.setEnabled(False)
             return
         self._run_pending = False
@@ -849,20 +980,24 @@ class AnalysisPanel(QWidget):
         worker.finished.connect(self._finished)
         worker.start()
 
-    def _target(self) -> tuple[tuple[float, float], str | None]:
-        """(décalage, image ouverte) de l'entrée principale : où poser les résultats."""
+    def _target(self) -> tuple[tuple[float, float], str | None, Any]:
+        """(décalage, image ouverte, calque traité) de l'entrée principale : où poser les
+        résultats, et d'après quelle image les afficher."""
         primary = self._primary_layer()
         if primary is None:
-            return (0.0, 0.0), None
-        return (float(primary.translate[-2]), float(primary.translate[-1])), documents.doc_of(primary)
+            return (0.0, 0.0), None, None
+        offset = (float(primary.translate[-2]), float(primary.translate[-1]))
+        return offset, documents.doc_of(primary), primary
 
     def _finished(self) -> None:
         self._busy = False
         self.run_btn.setEnabled(True)
-        if self._run_pending:
+        self.preview.setText("Aperçu en direct")
+        if self._run_pending and self._pending_op is self._op:
             self._run()
         elif self._preview_pending:
             self._schedule_preview()
+        self._run_pending = False  # on a changé d'outil entre-temps : la demande est oubliée
 
     def _error(self, op: Operation, exc: Exception) -> None:
         QMessageBox.warning(
@@ -900,8 +1035,10 @@ class AnalysisPanel(QWidget):
             self.message.emit(f"Aperçu : {exc}")
             return
         self._busy = True
+        self.preview.setText("Aperçu en direct — calcul en cours…")
+        target = self._target()
         worker = create_worker(op.func, *inputs, **params, _start_thread=False, _ignore_errors=True)
-        worker.returned.connect(lambda out: self._show_outputs(op, out, preview=True))
+        worker.returned.connect(lambda out: self._show_outputs(op, out, preview=True, target=target))
         worker.errored.connect(lambda exc: self.message.emit(f"Aperçu : {exc}"))
         worker.finished.connect(self._finished)
         worker.start()
@@ -929,41 +1066,82 @@ class AnalysisPanel(QWidget):
         op: Operation,
         out: Any,
         preview: bool = False,
-        target: tuple[tuple[float, float], str | None] | None = None,
+        target: tuple[tuple[float, float], str | None, Any] | None = None,
     ) -> None:
-        if preview:
-            if self._op is not op or not self.preview.isChecked():
-                return  # l'utilisateur est passé à autre chose pendant le calcul
-            selected = self.viewer.layers.selection.active
-            self._clear_preview()
+        if preview and (self._op is not op or not self.preview.isChecked()):
+            return  # l'utilisateur est passé à autre chose pendant le calcul
         # les résultats appartiennent à l'image traitée : ils se ferment avec elle
-        offset, doc = target if target is not None else self._target()
-        items = out if isinstance(out, tuple) else (out,)
-        for item in items:
-            if item is None:
-                continue
-            if isinstance(item, Table):
-                if not preview:
-                    self.table_ready.emit(item)
-                continue
-            self._add_layer(item, offset, PREVIEW_PREFIX if preview else "", doc)
-        if preview:
-            for layer in self._preview_layers():
-                layer.opacity = self.preview_opacity.value() / 100
-            if selected is not None and selected.name in self.viewer.layers:
-                self.viewer.layers.selection.active = selected
+        offset, doc, source = target if target is not None else self._target()
+        if source is not None and source not in self.viewer.layers:
+            # l'image a été fermée pendant le calcul : son résultat ne la ferait pas revenir
+            self._clear_preview() if preview else self.message.emit(
+                f"{op.name} : l'image a été fermée pendant le calcul, le résultat est abandonné"
+            )
             return
+        items = [i for i in (out if isinstance(out, tuple) else (out,)) if i is not None]
+        if preview:
+            self._show_preview(items, offset, doc, source)
+            return
+        shown = source is None or bool(source.visible)  # une autre image est affichée entre-temps
+        for item in items:
+            if isinstance(item, Table):
+                self.table_ready.emit(item)
+                continue
+            layer = self._add_layer(item, offset, "", doc, like=source)
+            if layer is not None and not shown:
+                layer.visible = False  # il attend avec son image, sans se poser sur une autre
         self.message.emit(f"{op.name} : terminé")
+        if self.preview.isChecked():  # le résultat est là : l'aperçu n'a plus rien à montrer
+            self.preview.setChecked(False)
         if self._recipe is not None and op is self._op:
             self._done.add(self._step)
             self._update_banner(done=True)
 
-    def _add_layer(self, item: Any, offset: tuple[float, float], prefix: str, doc: str | None = None) -> None:
+    def _show_preview(
+        self, items: list[Any], offset: tuple[float, float], doc: str | None, source: Any
+    ) -> None:
+        """Pose l'aperçu. Un aperçu déjà là est mis à jour sur place (ses pixels sont remplacés) :
+        pas de clignotement, et le calque choisi dans « Calques » reste choisi."""
+        selected = self.viewer.layers.selection.active
+        old = {layer.name: layer for layer in self._preview_layers()}
+        kept: set[str] = set()
+        for item in items:
+            if isinstance(item, Table):
+                continue
+            name = PREVIEW_PREFIX + item.name
+            layer = old.get(name)
+            if layer is not None and _same_kind(layer, item):
+                layer.data = item.data
+            else:
+                if layer is not None:
+                    self.viewer.layers.remove(layer)
+                layer = self._add_layer(item, offset, PREVIEW_PREFIX, doc, like=source)
+            if layer is not None:
+                layer.opacity = self.preview_opacity.value() / 100
+                layer.visible = not self.compare_btn.isDown()
+                kept.add(name)
+        for name, layer in old.items():
+            if name not in kept and layer in self.viewer.layers:
+                self.viewer.layers.remove(layer)
+        if selected is not None and selected in self.viewer.layers:
+            self.viewer.layers.selection.active = selected
+
+    def _add_layer(
+        self,
+        item: Any,
+        offset: tuple[float, float],
+        prefix: str,
+        doc: str | None = None,
+        like: Any | None = None,
+    ) -> Any | None:
+        """Ajoute un résultat à la vue. ``like`` : l'image traitée ; une image de même nature
+        reprend ses réglages d'affichage, pour que l'on voie ce que l'outil a changé (un
+        contraste recalculé sur chaque résultat masquait un simple changement de luminosité)."""
         px = item.pixel_size_um or 1.0
         name = prefix + item.name
         if isinstance(item, Rois):
             if not len(item):
-                return
+                return None
             layer = self.viewer.add_shapes(
                 [v for _, v in item.shapes],
                 shape_type=[k for k, _ in item.shapes],
@@ -1001,8 +1179,10 @@ class AnalysisPanel(QWidget):
                 layer = self.viewer.add_labels(data, **kwargs)
             else:
                 layer = self.viewer.add_image(data, rgb=rgb, **kwargs)
+                _display_like(layer, like)
         layer.metadata["pixel_size_um"] = item.pixel_size_um
         documents.tag(layer, doc)
+        return layer
 
     # ------------------------------------------------------- pour le reste de Fuji
     @property
@@ -1010,10 +1190,10 @@ class AnalysisPanel(QWidget):
         """Vrai pendant un calcul (opération ou aperçu)."""
         return self._busy
 
-    def add_result(self, item: Any, prefix: str = "", doc: str | None = None) -> None:
+    def add_result(self, item: Any, prefix: str = "", doc: str | None = None) -> Any | None:
         """Affiche un résultat venu d'ailleurs (assistant IA, script) : image, masque, ROI
-        ou points."""
-        self._add_layer(item, (0.0, 0.0), prefix, doc)
+        ou points. Renvoie le calque ajouté."""
+        return self._add_layer(item, (0.0, 0.0), prefix, doc)
 
     def run_operation(
         self, name: str, inputs: dict[str, str] | None = None, params: dict[str, Any] | None = None
@@ -1048,7 +1228,7 @@ class AnalysisPanel(QWidget):
             path = open_in_fiji(data)
             self.message.emit(f"Ouvert dans Fiji : {path}")
         except Exception as exc:
-            QMessageBox.warning(self, "Fiji", str(exc))
+            QMessageBox.warning(self, "Fiji", f"L'image n'a pas pu être ouverte dans Fiji : {exc}")
 
 
 __all__ = [

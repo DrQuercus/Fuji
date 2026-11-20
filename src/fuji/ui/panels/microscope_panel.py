@@ -26,8 +26,9 @@ from qtpy.QtWidgets import (
 
 from fuji.core.devices import LightSource
 from fuji.core.microscope import Microscope
+from fuji.text import number
 
-from ..components import icon_button
+from ..components import button, icon_button
 from ..flatfield_widget import FlatFieldWidget
 from ..widgets import hint_label, row, section
 
@@ -94,6 +95,9 @@ class MicroscopePanel(QWidget):
         self.exposure.setDecimals(2)
         self.exposure.setSuffix(" ms")
         self.exposure.setKeyboardTracking(False)
+        # largeur d'une valeur courante (« 250,00 ms »), pas celle de la plus longue possible :
+        # le panneau reste assez étroit pour un écran de portable
+        self.exposure.setMinimumWidth(98)
         self.exposure.setValue(cam.get_exposure())
         self.exposure.valueChanged.connect(lambda v: cam.set_exposure(v))
         # curseur logarithmique : plage confortable de 0,1 ms à 10 s
@@ -101,7 +105,7 @@ class MicroscopePanel(QWidget):
         self.exp_slider.setRange(0, 1000)
         self._log_lo, self._log_hi = math.log10(max(lo, 0.05)), math.log10(min(hi, 10_000))
         self.exp_slider.valueChanged.connect(self._slider_to_exposure)
-        auto = QPushButton("Auto")
+        auto = button("Auto")
         auto.setToolTip("Exposition automatique : vise 70 % de la dynamique sur l'image actuelle")
         auto.clicked.connect(self._auto_exposure)
         grid.addWidget(QLabel("Exposition"), 0, 0)
@@ -121,7 +125,7 @@ class MicroscopePanel(QWidget):
             grid.addWidget(self.gain, 2, 1)
         lay.addLayout(grid)
         if caps["auto_white_balance"]:
-            wb = QPushButton("Balance des blancs")
+            wb = button("Balance des blancs")
             wb.setToolTip("Sur une zone vide de la lame : le fond devient neutre")
             wb.clicked.connect(self._white_balance)
             lay.addWidget(wb)
@@ -254,8 +258,7 @@ class MicroscopePanel(QWidget):
         threading.Thread(target=work, name="fuji-mouvement", daemon=True).start()
 
     def _stop_button(self) -> QPushButton:
-        stop = QPushButton("■ Stop")
-        stop.setObjectName("danger")
+        stop = button("Arrêter", "stop", object_name="danger")
         stop.setToolTip("Arrêt d'urgence : interrompt tous les moteurs")
         stop.clicked.connect(lambda: self.run_motion(self.m.stop_motion))
         return stop
@@ -277,7 +280,7 @@ class MicroscopePanel(QWidget):
             ("→", 1, 0, 1, 2),
             ("↓", 0, 1, 2, 1),
         ):
-            b = QPushButton(text)
+            b = button(text)
             b.setFixedWidth(36)
             b.clicked.connect(
                 lambda _=False, dx=dx, dy=dy: self.run_motion(
@@ -287,10 +290,10 @@ class MicroscopePanel(QWidget):
             grid.addWidget(b, r, c)
         grid.addWidget(self.xy_step, 1, 1)
         lay.addLayout(grid)
-        origin = QPushButton("Origine ici")
+        origin = button("Origine ici")
         origin.setToolTip("La position actuelle devient X = 0, Y = 0")
         origin.clicked.connect(lambda: self._set_origin(stage))
-        go_home = QPushButton("Aller à 0")
+        go_home = button("Aller à 0")
         go_home.clicked.connect(lambda: self.run_motion(stage.move_to, 0.0, 0.0))
         lay.addWidget(row(self._stop_button(), origin, go_home))
         self.click_to_center = QCheckBox("Double-clic : centrer le point")
@@ -303,7 +306,9 @@ class MicroscopePanel(QWidget):
         limits = stage.limits()
         if limits is not None:
             (xlo, xhi), (ylo, yhi) = limits
-            lay.addWidget(hint_label(f"Course : X {xlo:g} à {xhi:g} µm, Y {ylo:g} à {yhi:g} µm"))
+            lay.addWidget(
+                hint_label(f"Course : X {number(xlo)} à {number(xhi)} µm, Y {number(ylo)} à {number(yhi)} µm")
+            )
         return box
 
     def _set_origin(self, device) -> None:  # type: ignore[no-untyped-def]
@@ -322,12 +327,14 @@ class MicroscopePanel(QWidget):
         self.z_step.setRange(0.01, 1000)
         self.z_step.setValue(1.0)
         self.z_step.setSuffix(" µm")
-        up = QPushButton("▲")
-        down = QPushButton("▼")
+        up = button("▲", tooltip="Monter la mise au point d'un pas")
+        down = button("▼", tooltip="Descendre la mise au point d'un pas")
+        for b in (up, down):
+            b.setFixedWidth(36)  # comme les flèches de la platine
         up.clicked.connect(lambda: self.run_motion(focus.move_by, self.z_step.value()))
         down.clicked.connect(lambda: self.run_motion(focus.move_by, -self.z_step.value()))
         lay.addWidget(row(self.z_label, down, up, self.z_step))
-        zero = QPushButton("Z = 0 ici")
+        zero = button("Z = 0 ici")
         zero.setToolTip("La mise au point actuelle devient Z = 0")
         zero.clicked.connect(lambda: self._set_origin(focus))
         buttons = (
@@ -338,7 +345,7 @@ class MicroscopePanel(QWidget):
         lay.addWidget(row(*buttons))
         limits = focus.limits()
         if limits is not None:
-            lay.addWidget(hint_label(f"Course autorisée : {limits[0]:g} à {limits[1]:g} µm"))
+            lay.addWidget(hint_label(f"Course autorisée : {number(limits[0])} à {number(limits[1])} µm"))
         return box
 
     # ------------------------------------------------------------- rafraîchissement
@@ -346,7 +353,7 @@ class MicroscopePanel(QWidget):
         m = self.m
         px, src = m.pixel_size_um(), m.pixel_size_source()
         if hasattr(self, "pixel_label"):
-            self.pixel_label.setText(f"{px:.4f} µm ({src})" if px else "non calibré")
+            self.pixel_label.setText(f"{number(px)} µm/px ({src})" if px else "non calibré")
         cam = m.camera
         if cam is not None and hasattr(self, "exposure") and not self.exposure.hasFocus():
             self.exposure.blockSignals(True)
@@ -377,9 +384,9 @@ class MicroscopePanel(QWidget):
         try:  # un contrôleur débranché ne doit pas faire tomber le rafraîchissement
             if hasattr(self, "xy_label") and m.xy_stage is not None:
                 x, y = m.xy_stage.get_position()
-                self.xy_label.setText(f"X {x:.1f} µm   Y {y:.1f} µm")
+                self.xy_label.setText(f"X {number(x, 1)} µm   Y {number(y, 1)} µm")
             if hasattr(self, "z_label") and m.focus is not None:
-                self.z_label.setText(f"Z {m.focus.get_position():.2f} µm")
+                self.z_label.setText(f"Z {number(m.focus.get_position(), 2)} µm")
         except Exception as exc:
             if hasattr(self, "xy_label"):
                 self.xy_label.setText(f"Position inconnue : {exc}")

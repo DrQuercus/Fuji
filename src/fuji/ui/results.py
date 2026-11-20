@@ -3,12 +3,14 @@
 Au-dessus du tableau : les colonnes à montrer, le nombre de décimales, la virgule décimale
 (pour Excel en français), les statistiques de chaque colonne, et un graphique — celui du
 tableau (profil, histogramme) ou la distribution d'une colonne au choix. Un clic sur un
-titre de colonne trie le tableau. Les réglages sont retenus pour les tableaux suivants.
+titre de colonne trie le tableau entier (pas seulement les lignes affichées) ; chaque ligne
+garde son numéro, celui de l'objet mesuré. Les réglages sont retenus pour les tableaux suivants.
 """
 
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from typing import Any
 
 import numpy as np
@@ -22,7 +24,6 @@ from qtpy.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMenu,
-    QPushButton,
     QSizePolicy,
     QSpinBox,
     QSplitter,
@@ -33,7 +34,9 @@ from qtpy.QtWidgets import (
 )
 
 from fuji.analysis.image import Plot, Table
+from fuji.text import count
 
+from .components import button
 from .flow import FlowLayout
 from .prefs import settings
 from .widgets import PlotWidget, _fmt, hint_label
@@ -135,6 +138,8 @@ def accumulate(old: Table, new: Table) -> Table | None:
 
     if columns(old) != columns(new):
         return None
+    if any(old.units.get(c, "") != new.units.get(c, "") for c in new.data.columns):
+        return None  # des µm² et des px² dans la même colonne : un tableau à part
 
     def with_source(t: Table) -> pd.DataFrame:
         if SOURCE_COLUMN in t.data.columns:
@@ -158,27 +163,19 @@ def default_comma() -> bool:
     return QLocale().decimalPoint() == ","
 
 
+def sorted_frame(df: pd.DataFrame, column: Any = None, descending: bool = False) -> pd.DataFrame:
+    """Le tableau trié d'après une colonne : par valeurs (« 10 » après « 9 »), les cases vides
+    à la fin, l'ordre d'origine à égalité. Chaque ligne garde son numéro."""
+    if column is None or column not in df.columns:
+        return df
+    options: dict[str, Any] = {"ascending": not descending, "kind": "stable", "na_position": "last"}
+    try:
+        return df.sort_values(column, **options)
+    except TypeError:  # colonne qui mêle nombres et textes
+        return df.sort_values(column, key=lambda values: values.astype(str), **options)
+
+
 # ------------------------------------------------------------------ interface
-class _Cell(QTableWidgetItem):
-    """Case triée d'après sa valeur, et non d'après son texte (« 10 » après « 9 »)."""
-
-    def __init__(self, text: str, value: Any) -> None:
-        super().__init__(text)
-        self.value = value
-        self.label = ""  # le numéro de sa ligne dans le tableau d'origine
-
-    def __lt__(self, other: QTableWidgetItem) -> bool:
-        a, b = self.value, getattr(other, "value", None)
-        try:
-            if a != a or a is None:  # les cases vides vont à la fin
-                return False
-            if b != b or b is None:
-                return True
-            return bool(a < b)
-        except TypeError:
-            return str(a) < str(b)
-
-
 def _pref(key: str, default: Any) -> Any:
     try:
         return settings().value(key, default, type=type(default))
@@ -202,7 +199,7 @@ class ResultsWidget(QWidget):
         self.table = table
         self.plot: PlotWidget | None = None
         self._shown_plot: Table | None = None
-        self._filling = False
+        self._sort: tuple[Any, bool] | None = None  # (colonne, décroissant)
         lay = QVBoxLayout(self)
         lay.setSpacing(6)
         self.title = QLabel()
@@ -219,7 +216,7 @@ class ResultsWidget(QWidget):
         bar = QWidget()
         tools = FlowLayout(bar, spacing=8, line_spacing=6)
         tools.setContentsMargins(0, 0, 0, 0)
-        self.columns_btn = QPushButton("Colonnes")
+        self.columns_btn = button("Colonnes")
         self.columns_btn.setToolTip(
             "Choisir les colonnes montrées, copiées et exportées (retenu pour les prochains tableaux)"
         )
@@ -252,12 +249,12 @@ class ResultsWidget(QWidget):
         self.bins.setToolTip("Nombre de barres de la distribution (auto : d'après le nombre de valeurs)")
         self.bins.setKeyboardTracking(False)
         self.bins.valueChanged.connect(self._graph_changed)
-        self.copy_btn = QPushButton("Copier")
+        self.copy_btn = button("Copier")
         self.copy_btn.setToolTip("Copie le tableau : il se colle tel quel dans Excel ou un autre tableur")
         self.copy_btn.clicked.connect(self._copy)
-        self.export_btn = QPushButton("Exporter (CSV)…")
+        self.export_btn = button("Exporter (CSV)…")
         self.export_btn.clicked.connect(self._export)
-        self.save_plot_btn = QPushButton("Image du graphique…")
+        self.save_plot_btn = button("Image du graphique…")
         self.save_plot_btn.setToolTip("Enregistre le graphique affiché dans un fichier PNG")
         self.save_plot_btn.clicked.connect(self._save_plot)
         for w in (
@@ -287,7 +284,14 @@ class ResultsWidget(QWidget):
         right.setChildrenCollapsible(False)
         self.grid = QTableWidget()
         self.grid.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.grid.horizontalHeader().setToolTip("Un clic sur un titre trie le tableau d'après cette colonne")
+        header = self.grid.horizontalHeader()
+        header.setToolTip(
+            "Un clic sur un titre trie tout le tableau d'après cette colonne ; un deuxième inverse "
+            "l'ordre, un troisième rend l'ordre d'origine"
+        )
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
+        header.sectionClicked.connect(self._header_clicked)
         self.stats_grid = QTableWidget()
         self.stats_grid.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.stats_grid.horizontalHeader().hide()
@@ -301,7 +305,6 @@ class ResultsWidget(QWidget):
             lambda i, _old, new: self.stats_grid.setColumnWidth(i, new)
         )
         self.grid.horizontalScrollBar().valueChanged.connect(self.stats_grid.horizontalScrollBar().setValue)
-        self.grid.model().layoutChanged.connect(self._relabel)  # après un tri
         right.addWidget(self.grid)
         right.addWidget(self.stats_grid)
         right.setStretchFactor(0, 3)
@@ -320,10 +323,10 @@ class ResultsWidget(QWidget):
         """Montre un autre tableau (ou le même, complété) avec les réglages en cours."""
         self.table = table
         df = table.data
-        self.title.setText(f"<b>{table.name}</b> — {len(df)} ligne(s)")
-        summary = "  ·  ".join(f"{k} : {_fmt(v)}" for k, v in table.summary.items())
-        self.summary.setText(summary)
-        self.summary.setToolTip(summary)
+        if self._sort is not None and self._sort[0] not in df.columns:
+            self._sort = None
+        self.title.setText(f"<b>{table.name}</b> — {count(len(df), 'ligne')}")
+        self._show_summary()
         shown = min(len(df), MAX_ROWS_SHOWN)
         self.note.setText(
             f"{shown} premières lignes affichées ; l'export les contient toutes." if shown < len(df) else ""
@@ -348,11 +351,45 @@ class ResultsWidget(QWidget):
     def _text(self, value: Any) -> str:
         return format_value(value, int(self.decimals.currentData()), self.comma.isChecked())
 
+    def _auto(self, value: Any) -> str:
+        """Un nombre hors du tableau (résumé, note du graphique) : même virgule que les cases."""
+        number = isinstance(value, (float, np.floating))
+        return format_value(value, -1, self.comma.isChecked()) if number else _fmt(value)
+
+    def _show_summary(self) -> None:
+        summary = "  ·  ".join(f"{k} : {self._auto(v)}" for k, v in self.table.summary.items())
+        self.summary.setText(summary)
+        self.summary.setToolTip(summary)
+
+    def view(self) -> pd.DataFrame:
+        """Le tableau dans l'ordre affiché (trié, s'il l'a été) : celui de la copie et de l'export."""
+        return sorted_frame(self.table.data, *self._sort) if self._sort is not None else self.table.data
+
+    def sort_by(self, column: Any = None, descending: bool = False) -> None:
+        """Trie tout le tableau d'après une colonne (``None`` : l'ordre d'origine)."""
+        self._sort = (column, bool(descending)) if column in self.table.data.columns else None
+        self._refill()
+
+    def _header_clicked(self, index: int) -> None:
+        column = self.table.data.columns[index]
+        if self._sort is None or self._sort[0] != column:
+            self.sort_by(column)
+        elif not self._sort[1]:
+            self.sort_by(column, descending=True)
+        else:
+            self.sort_by(None)
+
+    def _refill(self) -> None:
+        widths = [self.grid.columnWidth(c) for c in range(self.grid.columnCount())]
+        self._fill()
+        for c, w in enumerate(widths):  # les colonnes élargies à la main le restent
+            self.grid.setColumnWidth(c, max(w, self.grid.columnWidth(c)))
+        self._fill_statistics()
+        self._apply_hidden()
+
     def _fill(self) -> None:
-        df = self.table.data.iloc[:MAX_ROWS_SHOWN]
+        df = self.view().iloc[:MAX_ROWS_SHOWN]
         grid = self.grid
-        self._filling = True
-        grid.setSortingEnabled(False)
         grid.clear()
         grid.setRowCount(len(df))
         grid.setColumnCount(len(df.columns))
@@ -361,21 +398,15 @@ class ResultsWidget(QWidget):
         align = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         for c, name in enumerate(df.columns):
             for r, v in enumerate(df[name].tolist()):
-                item = _Cell(self._text(v), v)
-                item.label = str(df.index[r])
+                item = QTableWidgetItem(self._text(v))
                 item.setTextAlignment(align)
                 grid.setItem(r, c, item)
         grid.resizeColumnsToContents()
-        grid.setSortingEnabled(True)
-        grid.horizontalHeader().setSortIndicator(-1, Qt.SortOrder.AscendingOrder)
-        self._filling = False
-
-    def _relabel(self, *_: Any) -> None:
-        """Après un tri, chaque ligne garde son numéro d'origine (celui de l'objet mesuré)."""
-        if self._filling or not self.grid.columnCount():
-            return
-        cells = [self.grid.item(r, 0) for r in range(self.grid.rowCount())]
-        self.grid.setVerticalHeaderLabels([getattr(c, "label", "") for c in cells])
+        if self._sort is None:
+            grid.horizontalHeader().setSortIndicator(-1, Qt.SortOrder.AscendingOrder)
+        else:
+            order = Qt.SortOrder.DescendingOrder if self._sort[1] else Qt.SortOrder.AscendingOrder
+            grid.horizontalHeader().setSortIndicator(list(df.columns).index(self._sort[0]), order)
 
     def _fill_statistics(self) -> None:
         df = self.table.data
@@ -455,12 +486,9 @@ class ResultsWidget(QWidget):
         s = settings()
         s.setValue("results/decimals", int(self.decimals.currentData()))
         s.setValue("results/decimal_comma", self.comma.isChecked())
-        widths = [self.grid.columnWidth(c) for c in range(self.grid.columnCount())]
-        self._fill()
-        for c, w in enumerate(widths):  # les colonnes élargies à la main le restent
-            self.grid.setColumnWidth(c, max(w, self.grid.columnWidth(c)))
-        self._fill_statistics()
-        self._apply_hidden()
+        self._refill()
+        self._show_summary()
+        self._graph_changed()  # la note du graphique prend la même virgule
 
     def _stats_toggled(self, on: bool) -> None:
         settings().setValue("results/statistics", bool(on))
@@ -502,8 +530,8 @@ class ResultsWidget(QWidget):
             try:
                 shown = distribution(self.table, column, self.bins.value())
                 values = _finite(self.table.data[column])
-                spread = f" ± {_fmt(float(np.std(values, ddof=1)))}" if values.size > 1 else ""
-                note = f"{column} : moyenne {_fmt(float(np.mean(values)))}{spread} (n = {values.size})"
+                spread = f" ± {self._auto(float(np.std(values, ddof=1)))}" if values.size > 1 else ""
+                note = f"{column} : moyenne {self._auto(float(np.mean(values)))}{spread} (n = {values.size})"
             except ValueError as exc:
                 note = str(exc)
         if self.plot is not None:
@@ -536,12 +564,13 @@ class ResultsWidget(QWidget):
             self.export(path)
 
     def export(self, path: str) -> None:
-        """Écrit les colonnes montrées dans un fichier CSV (toutes les lignes)."""
-        self.table.to_csv(path, columns=self.columns(), decimal="," if self.comma.isChecked() else ".")
+        """Écrit les colonnes montrées dans un fichier CSV (toutes les lignes, dans l'ordre affiché)."""
+        shown = replace(self.table, data=self.view())
+        shown.to_csv(path, columns=self.columns(), decimal="," if self.comma.isChecked() else ".")
 
     def clipboard_text(self) -> str:
         """Les colonnes montrées, séparées par des tabulations (se colle dans un tableur)."""
-        frame = self.table.frame(self.columns())
+        frame = replace(self.table, data=self.view()).frame(self.columns())
         return frame.to_csv(sep="\t", index_label=" ", decimal="," if self.comma.isChecked() else ".")
 
     def _copy(self) -> None:
@@ -557,5 +586,6 @@ __all__ = [
     "hidden_columns",
     "kind_of",
     "numeric_columns",
+    "sorted_frame",
     "statistics",
 ]

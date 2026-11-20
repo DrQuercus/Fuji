@@ -105,16 +105,16 @@ Pour vérifier : demande un déplacement de 50 µm dans Fuji et lis les graduati
 
 ## Dans l'interface
 
-![Contrôle d'un microscope motorisé : platine, mise au point, bouton Stop](motorisation.png)
+![Contrôle d'un microscope motorisé : platine, mise au point, bouton Arrêter](motorisation.png)
 
 - **Contrôle** : flèches de déplacement avec pas réglable, position en direct,
-  « Origine ici », « Aller à 0 », « Z = 0 ici », et un bouton **■ Stop** (aussi dans la
+  « Origine ici », « Aller à 0 », « Z = 0 ici », et un bouton **■ Arrêter** (aussi dans la
   barre rapide sous l'image) qui arrête immédiatement tous les moteurs.
 - **Double-clic sur l'image du live** : le point cliqué vient au centre du champ.
-- **Assistants → Platine** :
+- **Assistants → Platine motorisée** :
   - *Mesurer l'orientation* : la platine fait de petits pas et Fuji regarde dans quel sens
     l'image se déplace. À faire une fois (sur une lame riche en détails), puis
-    « Enregistrer dans le profil ». Nécessaire pour le centrage par double-clic et les
+    « Enregistrer dans la configuration ». Nécessaire pour le centrage par double-clic et les
     mosaïques.
   - *Mesurer le jeu* en X et en Y : la valeur trouvée se reporte dans `backlash_xy_um`.
 - **Acquisition** :
@@ -134,7 +134,7 @@ montre que la caméra n'est pas parfaitement alignée avec la platine.
 ## Sécurités
 
 - Un ordre hors des limites de course est **refusé**, jamais tronqué en silence.
-- Le bouton Stop reste disponible pendant un mouvement (les moteurs tournent dans un fil
+- Le bouton Arrêter reste disponible pendant un mouvement (les moteurs tournent dans un fil
   d'exécution séparé de l'interface).
 - Les mesures de l'assistant Platine sont **refusées plutôt que fausses** : image noire,
   lame vide, ou image qui ne suit pas la platine → message clair, rien n'est enregistré.

@@ -117,11 +117,10 @@ def _column(widget, name):
 
 @gui
 def test_decimals_comma_and_sorting(widget):
-    from qtpy.QtCore import Qt
 
     from fuji.ui.prefs import settings
 
-    assert "30 ligne(s)" in widget.title.text() and widget.summary.text() == "Count : 30"
+    assert "30 lignes" in widget.title.text() and widget.summary.text() == "Count : 30"
     first = widget.table.data["Area"].iloc[0]
     widget.decimals.setCurrentIndex(widget.decimals.findData(1))
     assert _column(widget, "Area")[0] == f"{first:.1f}" and _column(widget, "Type")[0] == "rond"
@@ -132,8 +131,7 @@ def test_decimals_comma_and_sorting(widget):
     assert settings().value("results/decimal_comma", type=bool) is True
 
     # tri d'après les valeurs (et non le texte) ; les numéros de ligne suivent
-    area = list(widget.table.data.columns).index("Count")
-    widget.grid.sortItems(area, Qt.SortOrder.DescendingOrder)
+    widget.sort_by("Count", descending=True)
     values = [int(v) for v in _column(widget, "Count")]
     assert values == sorted(values, reverse=True) and values[0] == 10
     # chaque ligne garde son numéro d'origine : celui de l'objet mesuré
@@ -141,9 +139,57 @@ def test_decimals_comma_and_sorting(widget):
     assert widget.grid.verticalHeaderItem(0).text() == str(best)
     row = widget.table.data.loc[int(widget.grid.verticalHeaderItem(5).text())]
     assert _column(widget, "Count")[5] == str(row["Count"])
+    # … y compris après un changement de décimales (les numéros repartaient de 1, 2, 3…)
+    widget.decimals.setCurrentIndex(widget.decimals.findData(2))
+    assert widget.grid.verticalHeaderItem(0).text() == str(best)
+    row = widget.table.data.loc[int(widget.grid.verticalHeaderItem(5).text())]
+    assert _column(widget, "Count")[5] == str(row["Count"])
+    # un clic sur le titre : croissant, puis décroissant, puis l'ordre d'origine
     mean = list(widget.table.data.columns).index("Mean")
-    widget.grid.sortItems(mean, Qt.SortOrder.AscendingOrder)
+    widget._header_clicked(mean)
     assert _column(widget, "Mean")[-1] == ""  # les cases vides à la fin
+    shown = [float(v.replace(",", ".")) for v in _column(widget, "Mean") if v]
+    assert shown == sorted(shown)
+    widget._header_clicked(mean)
+    shown = [float(v.replace(",", ".")) for v in _column(widget, "Mean") if v]
+    assert shown == sorted(shown, reverse=True) and _column(widget, "Mean")[-1] == ""
+    widget._header_clicked(mean)
+    assert widget.grid.verticalHeaderItem(0).text() == str(widget.table.data.index[0])
+
+
+@gui
+def test_sort_covers_the_whole_table_and_export_follows(qtbot, tmp_path):
+    """Au-delà de 2000 lignes, le tri ne portait que sur les lignes affichées."""
+    from fuji.ui.results import MAX_ROWS_SHOWN, ResultsWidget, sorted_frame
+
+    n = MAX_ROWS_SHOWN + 500
+    df = pd.DataFrame({"Area": np.arange(n, dtype=float), "Nom": [f"objet {i}" for i in range(n)]})
+    df.index = pd.RangeIndex(1, n + 1)
+    widget = ResultsWidget(Table(df, name="Particules — test", units={"Area": "µm²"}))
+    qtbot.addWidget(widget)
+    widget.sort_by("Area", descending=True)
+    # la plus grande valeur est dans les lignes cachées d'origine : elle arrive en tête
+    assert widget.grid.verticalHeaderItem(0).text() == str(n)
+    assert widget.grid.rowCount() == MAX_ROWS_SHOWN
+    path = tmp_path / "tri.csv"
+    widget.export(str(path))
+    lines = path.read_text(encoding="utf-8-sig").splitlines()
+    assert lines[1].startswith(f"{n};") or lines[1].startswith(f"{n},")
+    assert widget.clipboard_text().splitlines()[1].startswith(f"{n}\t")
+    # colonne qui mêle nombres et textes : triée quand même, sans erreur
+    mixed = pd.DataFrame({"x": [3, "a", 1.5, None]})
+    assert len(sorted_frame(mixed, "x")) == 4 and sorted_frame(mixed, "absente") is mixed
+
+
+def test_accumulate_refuses_mixed_units():
+    """Des µm² et des px² ne vont pas dans la même colonne."""
+    from fuji.ui.results import accumulate
+
+    a = Table(pd.DataFrame({"Area": [1.0]}), name="Mesure — a", units={"Area": "µm²"})
+    b = Table(pd.DataFrame({"Area": [2.0]}), name="Mesure — b", units={"Area": "px²"})
+    c = Table(pd.DataFrame({"Area": [3.0]}), name="Mesure — c", units={"Area": "µm²"})
+    assert accumulate(a, b) is None
+    assert len(accumulate(a, c)) == 2
 
 
 @gui
@@ -255,7 +301,7 @@ def test_accumulate_box_gathers_a_series_in_one_tab(qtbot, tmp_path):
     merged = tabs.widget(1)
     assert len(merged.table) == 6 and merged.grid.rowCount() == 6
     assert merged.table.data["Image"].tolist() == ["lame 2"] * 2 + ["lame 3"] * 4
-    assert "6 ligne(s)" in merged.title.text() and merged.summary.text() == "Lignes : 6  ·  Images : 2"
+    assert "6 lignes" in merged.title.text() and merged.summary.text() == "Lignes : 6  ·  Images : 2"
     win.show_table(_table("Particules — lame 3", 4))  # un autre genre de mesure : son onglet
     assert tabs.count() == 3
     win.show_table(_table("Mesure — lame 4", 1, seed=3))

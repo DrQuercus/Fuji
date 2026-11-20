@@ -79,6 +79,9 @@
 | `ui/display_bar.py` | Barre d'affichage de l'espace Analyse : image affichée (choisir, fermer), zoom, histogramme, contraste, luminosité, gamma, couleur, masques, barre d'échelle |
 | `ui/results.py` | Tableau de résultats : colonnes, décimales, tri, statistiques, distribution, cumul d'une série |
 | `ui/drawing.py` | Style des ROI et des points, numéros et mesures affichés sur l'image |
+| `ui/layers_panel.py` | Panneau « Calques » de Fuji : liste, ordre, renommer, opacité, fusion ; les réglages de napari en mode expert |
+| `ui/components.py`, `ui/widgets.py` | Composants communs : cartes (`Card`, `OptionCard`, `section`), boutons (`button`, `icon_button`), rangées qui passent à la ligne (`flow`), raccourcis écrits pour l'ordinateur (`shortcut`) |
+| `text.py` | Textes en français : pluriels (`count`, `plural`), nombres à virgule (`number`) |
 | `ui/documents.py` | Images ouvertes dans Analyse : chaque image et ses résultats s'ouvrent, s'affichent et se ferment d'un bloc |
 | `ui/panels/analysis_panel.py`, `ui/panels/tool_menu.py`, `ui/panels/param_form.py` | Panneau « Outils » : menus par tâche, fiche de chaque outil, formulaire des réglages (curseurs, défauts, mémoire), démarches guidées |
 | `analysis/guide.py` | Mode d'emploi des outils : menus, résumés, « quand l'utiliser », démarches |
@@ -86,6 +89,25 @@
 | `ui/flow.py`, `ui/prefs.py` | Disposition qui passe à la ligne (petits écrans) ; préférences (isolables pour les tests) |
 | `ui/selftest.py` | Essai automatique de l'installation (`fuji selftest`) |
 | `packaging/` | Application empaquetée : icônes, script de construction du `.dmg`, contrôle de la version de macOS |
+
+## Règles de l'interface
+
+Pour que tous les écrans se ressemblent (harmonisation de la version 1.1) :
+
+- **Sections** : une carte à icône (`section(...)` ou `Card`), titre en gras dans la carte.
+  Une option que l'on active : `OptionCard` (interrupteur dans le titre).
+- **Boutons** : toujours `button(...)` ou `icon_button(...)`, jamais `QPushButton` nu. Un
+  seul bouton principal (`primary=True`) par panneau ; `object_name="danger"` pour supprimer.
+- **Rangées de boutons** : `flow(...)`, qui passe à la ligne. Tout panneau de droite doit
+  tenir dans 288 pixels (`tests/test_gui_layout.py` le vérifie).
+- **Formulaires** : `labelled(texte, champ)` pour une liste, libellé au-dessus pour un
+  curseur ; une ligne d'explication dessous.
+- **Nombres et textes** : `fuji.text.number` (virgule), `count` / `plural` (jamais « (s) ») ;
+  « … » et non « ... » ; un raccourci s'écrit `shortcut("Ctrl+K")`.
+- **Menu, puis page** : une liste de choix ouvre une page avec un retour (« Tous les
+  outils », « Tous les assistants »), plutôt que des onglets.
+- La feuille de style de napari ne s'applique qu'aux composants de napari
+  (`theme.napari_stylesheet`) ; ceux-ci, en anglais, ne se montrent qu'en mode expert.
 
 ## Ajouter un pilote
 

@@ -30,9 +30,10 @@ from qtpy.QtWidgets import (
 from superqt.utils import create_worker
 
 from fuji.io.captures import KINDS, CaptureInfo, CaptureStore, thumbnail
+from fuji.text import count, file_manager
 
 from . import icons
-from .components import EmptyState, button, hbox, hint
+from .components import EmptyState, button, flow, hint, shortcut
 from .prefs import settings
 from .theme import palette
 
@@ -110,14 +111,16 @@ class GalleryPanel(QWidget):
         lay.setSpacing(8)
         self.folder = hint()
         self.folder.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        show = button("Dossier", "folder", tooltip="Ouvrir le dossier des images dans le Finder")
+        show = button("Dossier", "folder", tooltip=f"Ouvrir le dossier des images dans {file_manager()}")
         show.clicked.connect(self.show_folder)
         change = button("Changer…", tooltip="Choisir où enregistrer les images prises")
         change.clicked.connect(self.change_folder)
-        other = button("Ouvrir…", "open", tooltip="Ouvrir une autre image (fichier) dans Analyse (Ctrl+O)")
+        other = button(
+            "Ouvrir…", "open", tooltip=f"Ouvrir une autre image (fichier) dans Analyse ({shortcut('Ctrl+O')})"
+        )
         other.clicked.connect(self.open_file_requested.emit)
         lay.addWidget(self.folder)
-        lay.addWidget(hbox(show, change, other))
+        lay.addWidget(flow(show, change, other))
 
         self.list = QListWidget()
         self.list.setIconSize(ICON)
@@ -132,7 +135,7 @@ class GalleryPanel(QWidget):
         self.empty = EmptyState(
             "gallery",
             "Aucune image aujourd'hui",
-            "Chaque capture (bouton Capturer ou Ctrl+K) arrive ici, déjà enregistrée. "
+            f"Chaque capture (bouton Capturer ou {shortcut('Ctrl+K')}) arrive ici, déjà enregistrée. "
             "Double-clic sur une image : l'ouvrir dans Analyse.",
         )
         self.views = QStackedWidget()
@@ -153,7 +156,7 @@ class GalleryPanel(QWidget):
         self.delete_btn = button("Supprimer", "trash", object_name="danger")
         self.delete_btn.clicked.connect(self.delete_selected)
         lay.addWidget(self.open_btn)
-        lay.addWidget(hbox(self.rename_btn, self.delete_btn))
+        lay.addWidget(flow(self.rename_btn, self.delete_btn))
         self.reload()
 
     # ------------------------------------------------------------------ liste
@@ -354,7 +357,7 @@ class GalleryPanel(QWidget):
         try:
             renamed = self.store.rename(info, name)
         except (OSError, ValueError) as exc:
-            QMessageBox.warning(self, "Renommer", str(exc))
+            QMessageBox.warning(self, "Renommer", f"L'image n'a pas pu être renommée : {exc}")
             return
         if info.name in self._memory:
             self._memory[renamed.name] = self._memory.pop(info.name)
@@ -373,7 +376,7 @@ class GalleryPanel(QWidget):
             return
         files = [i for i in infos if i.kind != "acquisition"]
         text = (
-            f"Mettre {len(files)} image(s) à la corbeille ?"
+            f"Mettre {count(len(files), 'image')} à la corbeille ?"
             if files
             else "Retirer ces acquisitions de la liste ? (leurs fichiers ne sont pas supprimés)"
         )
@@ -400,7 +403,9 @@ class GalleryPanel(QWidget):
         menu.addAction("Ouvrir à côté (garder les images ouvertes)", lambda: self.open_selected(keep=True))
         if self.rename_btn.isEnabled():
             menu.addAction("Renommer…", self.rename_selected)
-        menu.addAction("Afficher dans le Finder", lambda: self.show_folder(self.selected()[0].path.parent))
+        menu.addAction(
+            f"Afficher dans {file_manager()}", lambda: self.show_folder(self.selected()[0].path.parent)
+        )
         menu.addSeparator()
         menu.addAction("Supprimer…", self.delete_selected)
         menu.exec(self.list.viewport().mapToGlobal(pos))

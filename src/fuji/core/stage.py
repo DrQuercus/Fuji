@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from fuji.analysis.registration import MIN_CONFIDENCE, image_shift, shift_confidence
+from fuji.text import number, signed
 
 if TYPE_CHECKING:
     from .microscope import Microscope
@@ -59,11 +60,11 @@ class StageCalibration:
     def summary(self) -> str:
         mirror = ", image en miroir" if self.mirrored else ""
         text = (
-            f"caméra tournée de {self.rotation_deg:+.1f}° par rapport à la platine{mirror} ; "
-            f"{self.pixel_size_um:.4f} µm/pixel d'après la platine"
+            f"caméra tournée de {signed(self.rotation_deg, 1)}° par rapport à la platine{mirror} ; "
+            f"{number(self.pixel_size_um, 4)} µm/pixel d'après la platine"
         )
         if self.scale_error is not None:
-            text += f" ({self.scale_error * 100:+.1f} % par rapport au pixel calibré)"
+            text += f" ({signed(self.scale_error * 100, 1)} % par rapport au pixel calibré)"
         return text
 
 

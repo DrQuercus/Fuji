@@ -23,7 +23,6 @@ from qtpy.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QProgressBar,
-    QPushButton,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -32,7 +31,9 @@ from qtpy.QtWidgets import (
 from fuji.core.acquisition import AcquisitionEngine, AcquisitionSummary, AutofocusPlan, plan_acquisition
 from fuji.core.microscope import Microscope
 from fuji.io import OMETiffWriter
+from fuji.text import number, plural
 
+from ..components import OptionCard, ToggleSwitch, button, flow, icon_button
 from ..prefs import settings
 from ..qt_bridge import AcquisitionBridge
 from ..widgets import hint_label, row, section
@@ -46,6 +47,12 @@ def axial_nyquist_um(na: float, immersion: str = "air", wavelength_um: float = 0
     n = _IMMERSION_INDEX.get(immersion, 1.0)
     alpha = math.asin(min(na / n, 0.999))
     return wavelength_um / (2 * n * (1 - math.cos(alpha)))
+
+
+def _option(title: str, icon: str) -> tuple[OptionCard, QVBoxLayout, ToggleSwitch]:
+    """Carte d'une dimension facultative de l'acquisition : (carte, contenu, interrupteur)."""
+    card = OptionCard(title, icon)
+    return card, card.content_lay, card.toggle
 
 
 class AcquisitionPanel(QWidget):
@@ -74,15 +81,15 @@ class AcquisitionPanel(QWidget):
         prefs = settings()
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(6, 6, 6, 6)
+        lay.setContentsMargins(0, 0, 0, 0)
 
         # destination
         box, blay = section("Enregistrement")
         self.name = QLineEdit(prefs.value("acq/name", "acquisition"))
         default_dir = microscope.profile.save_directory or str(Path.home() / "Fuji" / "acquisitions")
         self.folder = QLineEdit(prefs.value("acq/folder", default_dir))
-        browse = QPushButton("…")
-        browse.setFixedWidth(30)
+        browse = icon_button("folder", "Choisir le dossier où enregistrer")
+        browse.setFixedWidth(34)
         browse.clicked.connect(self._browse)
         form = QFormLayout()
         form.addRow("Nom", self.name)
@@ -91,8 +98,7 @@ class AcquisitionPanel(QWidget):
         lay.addWidget(box)
 
         # temps
-        box, blay = section("Time-lapse")
-        self.use_time = QCheckBox("Activer")
+        box, blay, self.use_time = _option("Série dans le temps", "timer")
         self.interval = QDoubleSpinBox()
         self.interval.setRange(0, 86_400)
         self.interval.setValue(10)
@@ -101,15 +107,13 @@ class AcquisitionPanel(QWidget):
         self.loops.setRange(1, 100_000)
         self.loops.setValue(10)
         form = QFormLayout()
-        form.addRow(self.use_time)
         form.addRow("Intervalle", self.interval)
         form.addRow("Nombre de points", self.loops)
         blay.addLayout(form)
         lay.addWidget(box)
 
         # Z
-        box, blay = section("Pile Z")
-        self.use_z = QCheckBox("Activer")
+        box, blay, self.use_z = _option("Pile Z", "stack")
         self.z_range = QDoubleSpinBox()
         self.z_range.setRange(0, 1000)
         self.z_range.setValue(10)
@@ -119,13 +123,14 @@ class AcquisitionPanel(QWidget):
         self.z_step.setValue(1)
         self.z_step.setSuffix(" µm")
         form = QFormLayout()
-        form.addRow(self.use_z)
         form.addRow("Étendue (centrée)", self.z_range)
         form.addRow("Pas", self.z_step)
         blay.addLayout(form)
         if not caps["focus"]:
-            box.setEnabled(False)
-            blay.addWidget(hint_label("Pas de mise au point déclarée dans ce profil."))
+            box.toggle.setEnabled(False)
+            box.body.addWidget(
+                hint_label("Ce microscope n'a pas de mise au point déclarée dans sa configuration.")
+            )
         elif not caps["focus_motorized"]:
             blay.addWidget(
                 hint_label(
@@ -149,6 +154,8 @@ class AcquisitionPanel(QWidget):
                 Qt.CheckState.Checked if name == microscope.channel else Qt.CheckState.Unchecked
             )
             self.channels.addItem(item)
+        rows = max(1, self.channels.count())
+        self.channels.setFixedHeight(min(110, rows * 30 + 8))  # à la hauteur de la liste
         blay.addWidget(self.channels)
         if not microscope.channel_names:
             blay.addWidget(hint_label("Aucun canal défini : réglages actuels utilisés."))
@@ -159,20 +166,22 @@ class AcquisitionPanel(QWidget):
             box, blay = section("Positions")
             self.pos_list = QListWidget()
             self.pos_list.setMaximumHeight(90)
-            add = QPushButton("Ajouter la position actuelle")
+            add = button("Ajouter la position actuelle")
             add.clicked.connect(self._add_position)
-            clear = QPushButton("Vider")
+            clear = button("Vider")
             clear.clicked.connect(self._clear_positions)
             blay.addWidget(self.pos_list)
-            blay.addWidget(row(add, clear))
+            blay.addWidget(flow(add, clear))
             lay.addWidget(box)
 
-            box, blay = section(
-                "Mosaïque",
-                hint="Balaye une zone plus grande que le champ, centrée sur la position actuelle, et "
-                "assemble les images. Mesurez d'abord l'orientation de la platine (assistant « Platine »).",
+            box, blay, self.use_mosaic = _option("Mosaïque", "mosaic")
+            blay.addWidget(
+                hint_label(
+                    "Balaye une zone plus grande que le champ, centrée sur la position actuelle, et "
+                    "assemble les images. Mesurez d'abord l'orientation de la platine (assistant "
+                    "« Platine »)."
+                )
             )
-            self.use_mosaic = QCheckBox("Activer")
             self.mosaic_cols = QSpinBox()
             self.mosaic_cols.setRange(1, 50)
             self.mosaic_cols.setValue(3)
@@ -184,7 +193,6 @@ class AcquisitionPanel(QWidget):
             self.mosaic_overlap.setValue(15)
             self.mosaic_overlap.setSuffix(" %")
             form = QFormLayout()
-            form.addRow(self.use_mosaic)
             form.addRow("Colonnes", self.mosaic_cols)
             form.addRow("Rangées", self.mosaic_rows)
             form.addRow("Recouvrement", self.mosaic_overlap)
@@ -196,9 +204,9 @@ class AcquisitionPanel(QWidget):
 
         # autofocus (mise au point motorisée)
         if caps["focus_motorized"]:
-            box, blay = section("Autofocus")
-            self.use_autofocus = QCheckBox("Faire la mise au point à chaque position")
-            self.af_each_time = QCheckBox("… et à chaque point de temps")
+            box, blay, self.use_autofocus = _option("Autofocus", "focus")
+            blay.addWidget(hint_label("Refait la mise au point à chaque position."))
+            self.af_each_time = QCheckBox("Aussi à chaque point de temps")
             self.af_range = QDoubleSpinBox()
             self.af_range.setRange(1, 2000)
             self.af_range.setValue(20)
@@ -208,7 +216,6 @@ class AcquisitionPanel(QWidget):
             self.af_step.setValue(2)
             self.af_step.setSuffix(" µm")
             form = QFormLayout()
-            form.addRow(self.use_autofocus)
             form.addRow(self.af_each_time)
             form.addRow("Plage balayée", self.af_range)
             form.addRow("Pas", self.af_step)
@@ -226,13 +233,13 @@ class AcquisitionPanel(QWidget):
         self.progress = QProgressBar()
         self.progress.setVisible(False)
         lay.addWidget(self.progress)
-        self.start_btn = QPushButton("Démarrer l'acquisition")
+        self.start_btn = button("Démarrer l'acquisition")
         self.start_btn.setObjectName("primary")
         self.start_btn.clicked.connect(self.start)
-        self.pause_btn = QPushButton("Pause")
+        self.pause_btn = button("Pause")
         self.pause_btn.setCheckable(True)
         self.pause_btn.toggled.connect(self._pause)
-        self.stop_btn = QPushButton("Arrêter")
+        self.stop_btn = button("Arrêter")
         self.stop_btn.clicked.connect(self.engine.cancel)
         for b in (self.pause_btn, self.stop_btn):
             b.setEnabled(False)
@@ -301,13 +308,14 @@ class AcquisitionPanel(QWidget):
             self.plan_label.setText(f"Ces réglages d'acquisition ne sont pas possibles : {exc}")
             return
         self.plan_label.setText(
-            f"<b>{plan.n_frames}</b> image(s) · ≈ {plan.human_duration} · {plan.human_size}"
+            f"<b>{plan.n_frames}</b> {plural(plan.n_frames, 'image')} · ≈ {plan.human_duration} "
+            f"· {plan.human_size}"
         )
         self.warn_label.setText("\n".join(f"⚠ {w}" for w in plan.warnings))
         obj = self.m.objective
         if self.use_z.isChecked() and obj is not None:
             dz = axial_nyquist_um(obj.na, obj.immersion)
-            self._z_nyquist.setText(f"Pas conseillé avec {obj.label} : {dz:.2f} µm au plus.")
+            self._z_nyquist.setText(f"Pas conseillé avec {obj.label} : {number(dz, 2)} µm au plus.")
         else:
             self._z_nyquist.setText("")
 
@@ -323,7 +331,7 @@ class AcquisitionPanel(QWidget):
             return
         x, y = self.m.xy_stage.get_position()
         self._positions.append((x, y))
-        self.pos_list.addItem(f"P{len(self._positions)} : X {x:.1f}, Y {y:.1f} µm")
+        self.pos_list.addItem(f"P{len(self._positions)} : X {number(x, 1)}, Y {number(y, 1)} µm")
         self.update_plan()
 
     def _clear_positions(self) -> None:

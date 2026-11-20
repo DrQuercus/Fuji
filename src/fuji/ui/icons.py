@@ -97,6 +97,10 @@ _PATHS: dict[str, str] = {
     "roi_polygon": '<path d="M5 9.5l6.5-5.5 7.5 4-2 10.5H7z"/>',
     "roi_line": '<path d="M5.5 18.5l13-13"/><circle cx="5.5" cy="18.5" r="1.7" fill="{c}"/>'
     '<circle cx="18.5" cy="5.5" r="1.7" fill="{c}"/>',
+    "eye": '<path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12z"/>'
+    '<circle cx="12" cy="12" r="2.8"/>',
+    "eye_off": '<path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12z"/>'
+    '<path d="M4.5 4.5l15 15"/>',
     "roi_path": '<path d="M4.5 17.5l5-9.5 5 6.5 5-9"/><circle cx="4.5" cy="17.5" r="1.5" fill="{c}"/>'
     '<circle cx="9.5" cy="8" r="1.5" fill="{c}"/><circle cx="14.5" cy="14.5" r="1.5" fill="{c}"/>'
     '<circle cx="19.5" cy="5.5" r="1.5" fill="{c}"/>',

@@ -75,7 +75,9 @@ def intensity_stats(values: np.ndarray) -> dict[str, float]:
     else:
         median = float(np.median(v))
         lo_f, hi_f = float(v.min()), float(v.max())
-        if hi_f > lo_f:
+        # des valeurs interpolées le long d'une ligne, sur une zone uniforme, ne diffèrent que
+        # du dernier chiffre (40 et 40,000000000000007) : pas de quoi faire 256 classes
+        if hi_f - lo_f > 1e-9 * max(1.0, abs(lo_f), abs(hi_f)):
             hist, _ = np.histogram(v, bins=256, range=(lo_f, hi_f))
             width = (hi_f - lo_f) / 256.0
             mode = lo_f + int(np.argmax(hist)) * width + width / 2.0

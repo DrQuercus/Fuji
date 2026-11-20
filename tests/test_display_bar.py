@@ -148,12 +148,16 @@ def test_auto_saturation_smoothing_and_inverted_display(window, qtbot):
 
 
 def test_scale_bar_settings_apply_to_both_views_and_persist(window, qtbot, monkeypatch):
+    import numpy as np
     from qtpy.QtWidgets import QInputDialog
 
     from fuji.ui.display_bar import DisplayBar, scale_bar_of, scale_bar_prefs
 
     bar = window.display_bar
     bars = [scale_bar_of(window.viewer), scale_bar_of(window.scope_viewer)]
+    assert not any(b.visible for b in bars)  # vues sans image : rien à mesurer
+    _ramp(window)
+    window.scope_viewer.add_image(np.zeros((20, 30), np.uint16), name="live")
     assert all(b.visible for b in bars)
     bar.scale_choices[("position", "top_left")].trigger()
     bar.scale_choices[("color", "yellow")].trigger()
@@ -229,10 +233,11 @@ def test_apply_contrast_to_pixels_makes_a_new_image(window, qtbot):
     bar.max_box.setValue(2500)
     layer.gamma = 2.0
     bar.apply_action.trigger()
-    panel = window.analysis
-    qtbot.waitUntil(lambda: not panel.busy and "rampe (niveaux)" in window.viewer.layers, timeout=20000)
-    assert window._section == "analysis" and panel._op.name == "Niveaux"
-    out = np.asarray(window.viewer.layers["rampe (niveaux)"].data)
+    qtbot.waitUntil(lambda: "rampe (niveaux)" in window.viewer.layers, timeout=20000)
+    result = window.viewer.layers["rampe (niveaux)"]
+    out = np.asarray(result.data)
+    # déjà étirée : montrée du noir au blanc, sans réglage par-dessus
+    assert float(result.contrast_limits[0]) == 0.0 and result.gamma == 1.0
     source = np.asarray(layer.data).astype(np.float64)
     full = white_level(np.asarray(layer.data))  # dynamique de l'image (ici 12 bits dans 16)
     expected = np.clip((source - 1500) / 1000, 0, 1) ** 2 * full

@@ -115,7 +115,7 @@ En plus :
   pour que l'IA ne mesure pas n'importe quoi.
 
 Tu restes responsable de ce qui se passe sous l'objectif : pour les premiers essais avec
-des moteurs, garde la main près du bouton Stop et règle `z_max_um` dans le profil.
+des moteurs, garde la main près du bouton Arrêter et règle `z_max_um` dans le profil.
 
 ## Ce que l'IA peut faire (37 outils)
 

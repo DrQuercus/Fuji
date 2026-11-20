@@ -7,6 +7,8 @@ from qtpy.QtCore import QPointF, QRectF, Qt
 from qtpy.QtGui import QColor, QPainter, QPainterPath, QPen
 from qtpy.QtWidgets import QSizePolicy, QWidget
 
+from fuji.text import number
+
 from .theme import ThemeManager, palette
 
 _RGB = ("#ff5a5a", "#3ddc84", "#4f8cff")
@@ -93,7 +95,9 @@ class HistogramWidget(QWidget):
                 f.setBold(True)
                 painter.setFont(f)
                 painter.drawText(
-                    top, int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop), f"⚠ saturé {sat:.1f} %"
+                    top,
+                    int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop),
+                    f"⚠ saturé {number(sat, 1)} %",
                 )
             else:
                 painter.setPen(QColor(p.faint))
