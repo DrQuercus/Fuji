@@ -314,7 +314,7 @@ class ContrastHistogram(QWidget):
 def _fmt(v: float) -> str:
     if abs(v) >= 1000 or float(v).is_integer():
         return f"{v:.0f}"
-    return f"{v:.3g}"
+    return f"{v:.3g}".replace(".", ",")
 
 
 def _group(title: str, *widgets: QWidget, row: bool = True) -> QWidget:

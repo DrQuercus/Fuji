@@ -32,7 +32,7 @@ from fuji.assistants import (
 )
 from fuji.assistants.focus import METRICS, autofocus
 from fuji.core.microscope import Microscope
-from fuji.text import number
+from fuji.text import number, signed
 
 from ..components import button, flow, label, set_icon
 from ..flatfield_widget import FlatFieldWidget
@@ -435,7 +435,7 @@ class CalibrationWidget(QWidget):
         if current:
             cmp = (
                 f"<br>Valeur actuelle : {number(current)} µm/px ({self.m.pixel_size_source()}), "
-                f"écart {100 * (r.pixel_size_um / current - 1):+.1f} %"
+                f"écart {signed(100 * (r.pixel_size_um / current - 1))} %"
             )
         warn = ""
         if not r.reliable:
