@@ -108,6 +108,8 @@ class DemoCamera(Camera):
         objective_changer: str | None = None,
         transmitted_light: str | None = None,
         fluorescence: dict[str, dict[str, Any]] | None = None,
+        condenser: str | None = None,
+        dark_field_na: float = 0.7,
         focus_position_um: float = 0.0,
         specimen: str = "cellules",
         simulate_timing: bool = True,
@@ -126,7 +128,10 @@ class DemoCamera(Camera):
             "z": focus,
             "obj": objective_changer,
             "lamp": transmitted_light,
+            "cond": condenser,
         }
+        #: fond noir : ouverture de l'éclairage annulaire (un objectif plus ouvert voit le fond)
+        self._dark_na = float(dark_field_na)
         self._fluo = fluorescence or {}
         self._focus0 = float(focus_position_um)
         self._timing = simulate_timing
@@ -466,7 +471,27 @@ class DemoCamera(Camera):
         ]
         nch = 3 if self._color else 1
 
-        if lamp_level > 0 or not active_fluo:
+        cond = self._dev("cond")
+        dark_field = cond is not None and any(w in cond.get_label().lower() for w in ("noir", "dark"))
+        if dark_field and lamp_level > 0:
+            # fond noir : seule la lumière diffusée par les bords des objets entre dans
+            # l'objectif ; au-delà de l'ouverture de l'éclairage, la lumière directe aussi
+            if sigma_px > 0.4:
+                cyto = ndi.gaussian_filter(cyto, sigma_px, truncate=3.0)
+                nuc = ndi.gaussian_filter(nuc, sigma_px, truncate=3.0)
+            scatter = np.zeros(shape, np.float32)
+            for m_, w_ in ((cyto, 1.0), (nuc, 0.7)):
+                scatter += w_ * np.hypot(ndi.sobel(m_, 0), ndi.sobel(m_, 1))
+            scatter = scatter * 0.9 + 0.12 * (cyto + nuc)
+            illum = self._illumination_mask(shape) * lamp_level
+            tint = np.array([1.0, 0.93, 0.8], np.float32) if self._color else np.ones(1, np.float32)
+            signal = (illum * scatter * k * 1.6)[..., None] * tint
+            if na > self._dark_na:  # objectif trop ouvert : le fond s'éclaire
+                leak = min(1.0, (na - self._dark_na) / 0.3)
+                od = (cyto * 0.45 + nuc * 0.9)[..., None]
+                signal += illum[..., None] * np.exp(-od) * k * 0.8 * leak * tint
+            signal += 0.002 * k  # lumière parasite
+        elif lamp_level > 0 or not active_fluo:
             # transmission (fond clair) ; flou appliqué aux cartes d'absorbance
             # (approximation suffisante pour un simulateur, 2 filtrages au lieu de 3)
             if sigma_px > 0.4:
@@ -622,6 +647,15 @@ class DemoShutter(Shutter):
         OptionSpec("focus", "device", "Mise au point simulée", device_kind="focus", advanced=True),
         OptionSpec("objective_changer", "device", "Tourelle simulée", device_kind="state", advanced=True),
         OptionSpec("transmitted_light", "device", "Lampe simulée", device_kind="light_source", advanced=True),
+        OptionSpec(
+            "condenser",
+            "device",
+            "Condenseur simulé",
+            device_kind="state",
+            advanced=True,
+            help="Une position dont le nom contient « noir » donne une image de fond noir",
+        ),
+        OptionSpec("dark_field_na", "float", "Ouverture du fond noir", 0.7, min=0.1, max=1.5, advanced=True),
         OptionSpec(
             "fluorescence",
             "mapping",

@@ -222,7 +222,15 @@ def auto_expose_async(microscope: Microscope, message: Any, done: Any, owner: QW
         return
     microscope._auto_exposing = True  # type: ignore[attr-defined]
     message("Exposition automatique…")
-    worker = create_worker(cam.auto_expose, _start_thread=False, _ignore_errors=True)
+    # fond noir, fluorescence : quelques objets lumineux sur du noir (ne pas les saturer)
+    sparse = getattr(microscope, "channel_kind", None) in ("fond noir", "fluorescence")
+    worker = create_worker(
+        cam.auto_expose,
+        target=0.8 if sparse else 0.7,
+        sparse=sparse,
+        _start_thread=False,
+        _ignore_errors=True,
+    )
 
     def finished() -> None:
         microscope._auto_exposing = False  # type: ignore[attr-defined]

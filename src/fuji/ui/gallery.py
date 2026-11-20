@@ -2,12 +2,17 @@
 
 On y retrouve aussi les images composées en direct (profondeur de champ étendue,
 panoramas), les mosaïques et les acquisitions. Un double-clic ouvre l'image dans l'espace
-Analyse : la prise de vue et l'analyse restent séparées.
+Analyse, dans un onglet : les images déjà ouvertes le restent (leur nom est en gras ici).
+Plusieurs images choisies (une par canal : DAPI, GFP…) se superposent en une seule.
+La liste montre un jour à la fois ; les jours précédents se choisissent au-dessus.
 """
 
 from __future__ import annotations
 
+import os
+import re
 import threading
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +21,7 @@ from qtpy.QtCore import QSize, Qt, QUrl, Signal
 from qtpy.QtGui import QDesktopServices, QIcon, QImage, QPixmap
 from qtpy.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
     QFileDialog,
     QFrame,
     QInputDialog,
@@ -86,6 +92,8 @@ class GalleryPanel(QWidget):
     #: ouvrir une image dans l'espace Analyse : (CaptureInfo, données en mémoire ou None,
     #: garder les images déjà ouvertes)
     open_requested = Signal(object, object, bool)
+    #: superposer ces images en canaux d'une seule image
+    superpose_requested = Signal(list)
     #: images supprimées (liste de CaptureInfo) : à fermer si elles sont ouvertes
     deleted = Signal(list)
     #: image renommée : (ancien nom, nouvelle CaptureInfo)
@@ -111,6 +119,13 @@ class GalleryPanel(QWidget):
         lay.setSpacing(8)
         self.folder = hint()
         self.folder.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._day: Path | None = None  # le jour montré (None : aujourd'hui)
+        self._open: set[str] = set()  # fichiers ouverts dans Analyse
+        self.day = QComboBox()
+        self.day.setToolTip(
+            "Le jour dont les images sont montrées (les images prises vont toujours dans celui d'aujourd'hui)"
+        )
+        self.day.activated.connect(self._day_chosen)
         show = button("Dossier", "folder", tooltip=f"Ouvrir le dossier des images dans {file_manager()}")
         show.clicked.connect(self.show_folder)
         change = button("Changer…", tooltip="Choisir où enregistrer les images prises")
@@ -119,6 +134,7 @@ class GalleryPanel(QWidget):
             "Ouvrir…", "open", tooltip=f"Ouvrir une autre image (fichier) dans Analyse ({shortcut('Ctrl+O')})"
         )
         other.clicked.connect(self.open_file_requested.emit)
+        lay.addWidget(self.day)
         lay.addWidget(self.folder)
         lay.addWidget(flow(show, change, other))
 
@@ -130,7 +146,7 @@ class GalleryPanel(QWidget):
         self.list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._menu)
-        self.list.itemDoubleClicked.connect(lambda item: self.open_item(item))  # remplace
+        self.list.itemDoubleClicked.connect(lambda item: self.open_item(item))
         self.list.itemSelectionChanged.connect(self._update_buttons)
         self.empty = EmptyState(
             "gallery",
@@ -147,26 +163,80 @@ class GalleryPanel(QWidget):
             "Ouvrir dans Analyse",
             "chart",
             primary=True,
-            tooltip="Remplace l'image ouverte dans Analyse. Pour en garder plusieurs ouvertes : "
-            "clic droit → « Ouvrir à côté »",
+            tooltip="Chaque image s'ouvre dans un onglet, au-dessus de l'image ; "
+            "celles déjà ouvertes le restent",
         )
         self.open_btn.clicked.connect(self.open_selected)
+        self.superpose_btn = button(
+            "Superposer",
+            "channels",
+            tooltip="Une image par canal (DAPI, GFP, fond clair…) : choisissez-les (⌘ ou Ctrl + clic), "
+            "puis superposez-les en une seule image, chaque canal dans sa couleur",
+        )
+        self.superpose_btn.clicked.connect(lambda: self.superpose_requested.emit(self.selected()))
         self.rename_btn = button("Renommer", "edit")
         self.rename_btn.clicked.connect(self.rename_selected)
         self.delete_btn = button("Supprimer", "trash", object_name="danger")
         self.delete_btn.clicked.connect(self.delete_selected)
         lay.addWidget(self.open_btn)
-        lay.addWidget(flow(self.rename_btn, self.delete_btn))
+        lay.addWidget(flow(self.superpose_btn, self.rename_btn, self.delete_btn))
+        self._fill_days()
         self.reload()
 
     # ------------------------------------------------------------------ liste
     def reload(self) -> None:
-        """Relit le dossier du jour (au démarrage, ou après un changement de dossier)."""
+        """Relit le dossier du jour montré (au démarrage, après un changement de dossier)."""
         self.list.clear()
-        self.folder.setText(f"Enregistrées dans : {pretty_path(self.store.day_folder())}")
-        for info in self.store.list():
+        folder = self._day or self.store.day_folder()
+        where = "Enregistrées dans" if self._day is None else "Images du"
+        self.folder.setText(f"{where} : {pretty_path(folder)}")
+        for info in self.store.list(folder):
             self._insert(info, None)
         self._changed()
+
+    # ---------------------------------------------------------------- jours
+    def day_folders(self) -> list[Path]:
+        """Les jours qui ont des images, du plus récent au plus ancien (aujourd'hui en tête)."""
+        today = self.store.day_folder()
+        folders = {today}
+        root = self.store.root
+        if root.is_dir():
+            for p in root.iterdir():
+                if p.is_dir() and re.fullmatch(r"\d{4}-\d{2}-\d{2}", p.name):
+                    folders.add(p)
+        return sorted(folders, key=lambda p: p.name, reverse=True)
+
+    def _fill_days(self) -> None:
+        self.day.blockSignals(True)
+        self.day.clear()
+        today = date.today()
+        for folder in self.day_folders():
+            try:
+                when = datetime.strptime(folder.name, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            gap = (today - when).days
+            text = "Aujourd'hui" if gap == 0 else "Hier" if gap == 1 else f"{when:%d/%m/%Y}"
+            try:
+                n = sum(1 for f in folder.iterdir() if f.name.lower().endswith((".tif", ".tiff")))
+            except OSError:
+                n = 0
+            self.day.addItem(f"{text} — {count(n, 'image')}" if gap else text, str(folder))
+        current = str(self._day or self.store.day_folder())
+        self.day.setCurrentIndex(max(0, self.day.findData(current)))
+        self.day.blockSignals(False)
+        self.day.setVisible(self.day.count() > 1)
+
+    def _day_chosen(self, index: int) -> None:
+        folder = Path(str(self.day.itemData(index)))
+        self.show_day(None if folder == self.store.day_folder() else folder)
+
+    def show_day(self, folder: Path | None) -> None:
+        """Montre les images d'un autre jour (None : aujourd'hui)."""
+        self._day = folder
+        self.reload()
+        self._fill_days()
+        self.set_open(self._open)
 
     def entries(self) -> list[CaptureInfo]:
         return [self.list.item(i).data(_INFO) for i in range(self.list.count())]
@@ -208,6 +278,7 @@ class GalleryPanel(QWidget):
     def _update_buttons(self) -> None:
         selected = self.list.selectedItems()
         self.open_btn.setEnabled(bool(selected))
+        self.superpose_btn.setEnabled(len(selected) >= 2)
         self.delete_btn.setEnabled(bool(selected))
         single = len(selected) == 1 and selected[0].data(_INFO).kind != "acquisition"
         self.rename_btn.setEnabled(single)
@@ -247,6 +318,10 @@ class GalleryPanel(QWidget):
         from fuji.io.captures import describe
 
         folder = self.store.day_folder()
+        if self._day is not None:  # on regardait un autre jour : retour à celui des captures
+            self.show_day(None)
+        elif self.day.findData(str(folder)) < 0:  # minuit est passé : un nouveau jour
+            self._fill_days()
         name = self._reserve(KINDS.get(kind, kind), folder)
         info = CaptureInfo(
             path=folder / f"{name}.ome.tif",
@@ -329,19 +404,41 @@ class GalleryPanel(QWidget):
 
     # ------------------------------------------------------------------ actions
     def selected(self) -> list[CaptureInfo]:
-        return [item.data(_INFO) for item in self.list.selectedItems()]
+        """Les images choisies, dans l'ordre de la liste (la plus ancienne d'abord)."""
+        rows = sorted((self.list.row(item), item) for item in self.list.selectedItems())
+        return [item.data(_INFO) for _, item in reversed(rows)]
 
-    def open_item(self, item: QListWidgetItem, keep: bool = False) -> None:
-        """Ouvre l'image dans Analyse, à la place de celle qui y est (``keep`` : à côté)."""
-        info: CaptureInfo = item.data(_INFO)
+    def data_of(self, info: CaptureInfo) -> np.ndarray | None:
+        """Les pixels d'une image prise pendant cette séance, s'ils sont encore en mémoire."""
+        if info.path.parent != self.store.day_folder():
+            return None
         data = self._memory.get(info.name)
-        self.open_requested.emit(info, data if data is not None else self._unsaved.get(info.name), keep)
+        return data if data is not None else self._unsaved.get(info.name)
 
-    def open_selected(self, keep: bool = False) -> None:
-        """Plusieurs images choisies : la première remplace l'image ouverte, les autres
-        s'ouvrent à côté."""
-        for i, item in enumerate(reversed(self.list.selectedItems())):
-            self.open_item(item, keep=keep or i > 0)
+    def set_open(self, paths: set[str]) -> None:
+        """Marque (en gras) les images ouvertes dans Analyse."""
+        self._open = set(paths)
+        opened = {os.path.realpath(p) for p in paths}
+        for i in range(self.list.count()):
+            item = self.list.item(i)
+            info: CaptureInfo = item.data(_INFO)
+            is_open = os.path.realpath(str(info.path)) in opened
+            font = item.font()
+            if font.bold() != is_open:
+                font.setBold(is_open)
+                item.setFont(font)
+            item.setToolTip(f"{info.path}\n(ouverte dans Analyse)" if is_open else str(info.path))
+
+    def open_item(self, item: QListWidgetItem, keep: bool = True) -> None:
+        """Ouvre l'image dans Analyse, dans un onglet (les autres restent ouvertes)."""
+        info: CaptureInfo = item.data(_INFO)
+        self.open_requested.emit(info, self.data_of(info), True)
+
+    def open_selected(self, keep: bool = True) -> None:
+        """Ouvre les images choisies, chacune dans son onglet ; la dernière est affichée."""
+        rows = sorted((self.list.row(item), item) for item in self.list.selectedItems())
+        for _, item in reversed(rows):
+            self.open_item(item)
 
     def rename_selected(self) -> None:
         items = self.list.selectedItems()
@@ -399,8 +496,13 @@ class GalleryPanel(QWidget):
         if not self.list.selectedItems():
             return
         menu = QMenu(self)
-        menu.addAction("Ouvrir dans Analyse (remplace l'image ouverte)", self.open_selected)
-        menu.addAction("Ouvrir à côté (garder les images ouvertes)", lambda: self.open_selected(keep=True))
+        menu.addAction("Ouvrir dans Analyse", self.open_selected)
+        selected = self.selected()
+        if len(selected) >= 2:
+            menu.addAction(
+                f"Superposer les canaux ({count(len(selected), 'image')})",
+                lambda: self.superpose_requested.emit(self.selected()),
+            )
         if self.rename_btn.isEnabled():
             menu.addAction("Renommer…", self.rename_selected)
         menu.addAction(
@@ -424,5 +526,7 @@ class GalleryPanel(QWidget):
         self.wait_pending()
         self.store = CaptureStore(folder)
         settings().setValue("captures/folder", folder)
+        self._day = None
+        self._fill_days()
         self.reload()
         self.message.emit(f"Les images seront enregistrées dans {pretty_path(self.store.day_folder())}")

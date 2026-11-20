@@ -82,7 +82,9 @@
 | `ui/layers_panel.py` | Panneau « Calques » de Fuji : liste, ordre, renommer, opacité, fusion ; les réglages de napari en mode expert |
 | `ui/components.py`, `ui/widgets.py` | Composants communs : cartes (`Card`, `OptionCard`, `section`), boutons (`button`, `icon_button`), rangées qui passent à la ligne (`flow`), raccourcis écrits pour l'ordinateur (`shortcut`) |
 | `text.py` | Textes en français : pluriels (`count`, `plural`), nombres à virgule (`number`) |
-| `ui/documents.py` | Images ouvertes dans Analyse : chaque image et ses résultats s'ouvrent, s'affichent et se ferment d'un bloc |
+| `analysis/channels.py` | Canaux superposés : couleur d'un canal, capture couleur ramenée à un canal, image couleur finale |
+| `ui/composite.py` | Ouvrir une image à un ou plusieurs canaux, superposer plusieurs images en canaux |
+| `ui/documents.py` | Images ouvertes dans Analyse (une par onglet) : chaque image, ses canaux et ses résultats s'ouvrent, s'affichent et se ferment d'un bloc |
 | `ui/panels/analysis_panel.py`, `ui/panels/tool_menu.py`, `ui/panels/param_form.py` | Panneau « Outils » : menus par tâche, fiche de chaque outil, formulaire des réglages (curseurs, défauts, mémoire), démarches guidées |
 | `analysis/guide.py` | Mode d'emploi des outils : menus, résumés, « quand l'utiliser », démarches |
 | `ui/compose_panel.py` | Compositions en direct dans la section Acquisition (calcul dans un fil de travail) |

@@ -10,6 +10,10 @@ La correction se fait **à la sortie de la caméra** (:attr:`fuji.core.devices.C
 comme dans les logiciels fournis avec les caméras : le live, les captures, les compositions
 en direct et les acquisitions voient tous la même image corrigée.
 
+En **fond noir**, une zone vide de la lame est noire : diviser par elle n'aurait pas de sens.
+La référence y est la lumière parasite (reflets des poussières du condenseur et de la lame,
+halo), qui est **retirée** de chaque image au lieu d'être divisée (« soustraction »).
+
 - :class:`FlatField` — une référence prête à appliquer (rapide : ≈ 15 ms pour une image 4K) ;
 - :class:`FlatFieldStore` — les références enregistrées, une par objectif et par canal
   (``~/.fuji/flatfield/<microscope>/``) ;
@@ -45,6 +49,8 @@ log = logging.getLogger(__name__)
 MAX_GAIN = 8.0
 #: Nombre d'images moyennées pour une référence (le bruit est divisé par 4).
 DEFAULT_FRAMES = 16
+#: la référence est retirée de l'image (fond noir) au lieu de la diviser
+SUBTRACT = "soustraction"
 _WORKERS = max(1, min(4, os.cpu_count() or 1))
 _POOL = ThreadPoolExecutor(max_workers=_WORKERS, thread_name_prefix="fuji-fond")
 
@@ -80,6 +86,16 @@ class FlatField:
     ) -> None:
         signal = np.asarray(flat, dtype=np.float32)
         self.dark: np.ndarray | None = None
+        self.info = dict(info or {})
+        self._resized: dict[tuple[int, ...], FlatField | None] = {}
+        self.subtract_only = self.info.get("mode") == SUBTRACT
+        if self.subtract_only:
+            # fond noir : la lumière parasite est retirée ; le noir de la caméra (son niveau le
+            # plus bas) est gardé, pour que le bruit du fond ne soit pas coupé à zéro
+            black = np.percentile(signal[::4, ::4].reshape(-1, *signal.shape[2:]), 0.5, axis=0)
+            self.dark = np.clip(signal - np.asarray(black, np.float32), 0.0, None)
+            self.gain = np.ones(signal.shape, np.float32)
+            return
         if dark is not None and dark.shape == signal.shape:
             self.dark = np.asarray(dark, dtype=np.float32)
             signal = signal - self.dark
@@ -90,8 +106,6 @@ class FlatField:
         np.divide(mean, signal, out=gain, where=usable)
         np.clip(gain, 0.0, MAX_GAIN, out=gain)
         self.gain = gain
-        self.info = dict(info or {})
-        self._resized: dict[tuple[int, ...], FlatField | None] = {}
 
     @property
     def shape(self) -> tuple[int, ...]:
@@ -114,7 +128,7 @@ class FlatField:
             return None
         (h, w), (mh, mw) = shape[:2], mine[:2]
         out = object.__new__(FlatField)
-        out.info, out._resized = self.info, {}
+        out.info, out._resized, out.subtract_only = self.info, {}, self.subtract_only
         if mh % h == 0 and mw % w == 0 and mh // h == mw // w:  # image regroupée (binning)
             k = mh // h
 
@@ -145,13 +159,14 @@ class FlatField:
         if integer and max_value is not None:
             top = min(top, float(max_value))
         out = np.empty(frame.shape, frame.dtype if integer else np.float32)
-        gain, dark = self.gain, self.dark
+        gain, dark, divide = self.gain, self.dark, not self.subtract_only
 
         def work(rows: slice) -> None:
             part = frame[rows].astype(np.float32)
             if dark is not None:
                 part -= dark[rows]
-            part *= gain[rows]
+            if divide:
+                part *= gain[rows]
             if integer:
                 part += 0.5
                 np.clip(part, 0.0, top, out=part)
@@ -316,6 +331,36 @@ def check_reference(image: np.ndarray, max_value: float) -> list[str]:
     return warnings
 
 
+def check_background(image: np.ndarray, max_value: float) -> list[str]:
+    """Contrôle une référence de fond noir (lumière parasite d'une zone vide). Lève
+    :class:`FlatFieldError` si elle est saturée ; renvoie des remarques si un objet semble
+    être dans le champ (il serait retiré de toutes les images)."""
+    sample = np.asarray(image[::4, ::4], dtype=np.float32)
+    saturated = float(np.mean(sample >= 0.98 * max_value))
+    if saturated > 0.01:
+        raise FlatFieldError(
+            f"{saturated:.0%} de l'image est saturée : ce n'est pas un fond noir.\n\n"
+            "Vérifiez que le condenseur est en position fond noir et que l'objectif n'est pas trop "
+            "ouvert, ou réduisez l'exposition, puis recommencez."
+        )
+    gray = sample.mean(axis=-1) if sample.ndim == 3 else sample
+    median = float(np.median(gray))
+    spread = float(np.median(np.abs(gray - median))) * 1.4826 + 1e-6
+    bright = float(np.mean(gray > median + 8 * spread + 0.02 * max_value))
+    warnings = []
+    if median > 0.3 * max_value:
+        warnings.append(
+            f"Le fond n'est pas noir ({median / max_value:.0%} de la dynamique) : la lumière directe "
+            "entre sans doute dans l'objectif (objectif trop ouvert, condenseur mal centré ou trop bas)."
+        )
+    if bright > 0.005:
+        warnings.append(
+            f"Des objets brillent dans le champ ({bright:.1%} de l'image) : prenez la référence sur "
+            "une zone vide de la lame, sinon ils seront retirés de toutes les images."
+        )
+    return warnings
+
+
 # ------------------------------------------------------------------- correction
 @dataclass(frozen=True)
 class FlatFieldStatus:
@@ -417,8 +462,13 @@ class FlatFieldCorrection:
             else:
                 text = f"Aucune référence pour {what}."
             return FlatFieldStatus(state, text, False)
+        subtract = (info or {}).get("mode") == SUBTRACT
         if state == "on":
-            text = f"Fond corrigé — référence {what}{taken}."
+            text = (
+                f"Lumière parasite retirée — référence {what}{taken}."
+                if subtract
+                else f"Fond corrigé — référence {what}{taken}."
+            )
         elif state == "mismatch":
             text = (
                 "La référence n'a pas la taille des images de la caméra (résolution ou zone "
@@ -505,6 +555,8 @@ class FlatFieldCorrection:
             "channel": channel,
             "max_value": top,
         }
+        if kind == "flat" and getattr(self.m, "channel_kind", None) == "fond noir":
+            info["mode"] = SUBTRACT  # fond noir : la référence est retirée, pas divisée
         candidate = Candidate(kind, total, objective, channel, info)
         if kind == "dark":
             level = float(total[::4, ::4].mean()) / top
@@ -513,6 +565,8 @@ class FlatFieldCorrection:
                     f"L'image n'est pas noire ({level:.0%} de la dynamique) : coupez la lumière "
                     "(ou fermez l'obturateur), puis recommencez."
                 )
+        elif info.get("mode") == SUBTRACT:
+            candidate.warnings = check_background(total, top)
         else:
             candidate.warnings = check_reference(total, top)
         return candidate
@@ -527,6 +581,9 @@ class FlatFieldCorrection:
                 self._pending_dark = candidate.image
                 return None
             path = self.store.save(*keys, existing[0], candidate.image, self.store.info(*keys))
+        elif candidate.info.get("mode") == SUBTRACT:  # fond noir : le noir est déjà dans le fond
+            path = self.store.save(*keys, candidate.image, None, candidate.info)
+            self._enabled = True
         else:
             dark = self._pending_dark
             if dark is None or dark.shape != candidate.image.shape:
@@ -565,12 +622,14 @@ def _when(iso: str | None) -> str:
 
 __all__ = [
     "DEFAULT_FRAMES",
+    "SUBTRACT",
     "Candidate",
     "FlatField",
     "FlatFieldCorrection",
     "FlatFieldError",
     "FlatFieldStatus",
     "FlatFieldStore",
+    "check_background",
     "check_reference",
     "max_value_of",
 ]

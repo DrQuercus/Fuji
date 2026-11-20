@@ -13,7 +13,7 @@ from qtpy.QtCore import Signal
 from qtpy.QtWidgets import QCheckBox, QMenu, QMessageBox, QVBoxLayout, QWidget
 from superqt.utils import create_worker
 
-from fuji.core.flatfield import DEFAULT_FRAMES, Candidate
+from fuji.core.flatfield import DEFAULT_FRAMES, SUBTRACT, Candidate
 from fuji.core.microscope import Microscope
 
 from .components import button, hbox, hint, icon_button
@@ -37,17 +37,8 @@ class FlatFieldWidget(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(4)
         self.enable = QCheckBox("Corriger le fond")
-        self.enable.setToolTip(
-            "Divise chaque image par l'image de référence : éclairage inégal, vignettage et "
-            "poussières disparaissent du live, des captures et des panoramas."
-        )
         self.enable.toggled.connect(self._toggled)
-        self.take_btn = button(
-            "Prendre la référence",
-            None,
-            tooltip="Sur une zone VIDE de la lame, nette et bien éclairée (histogramme vers le "
-            f"milieu, rien de saturé). Moyenne de {DEFAULT_FRAMES} images.",
-        )
+        self.take_btn = button("Prendre la référence", None)
         self.take_btn.clicked.connect(lambda: self.take("flat"))
         self.more_btn = icon_button("gear", "Noir, effacer la référence")
         self.more_btn.setFixedWidth(34)
@@ -77,7 +68,28 @@ class FlatFieldWidget(QWidget):
         except RuntimeError:  # panneau déjà détruit (changement de microscope)
             pass
 
+    def _dark_field(self) -> bool:
+        return getattr(self.m, "channel_kind", None) == "fond noir"
+
     def _refresh(self) -> None:
+        if self._dark_field():  # une zone vide est noire : on retire la lumière parasite
+            self.enable.setToolTip(
+                "Retire de chaque image la lumière parasite d'une zone vide (reflets des poussières "
+                "du condenseur et de la lame, halo) : le fond devient bien noir."
+            )
+            self.take_btn.setToolTip(
+                "Sur une zone VIDE de la lame, en fond noir, avec l'exposition des images. "
+                f"Moyenne de {DEFAULT_FRAMES} images."
+            )
+        else:
+            self.enable.setToolTip(
+                "Divise chaque image par l'image de référence : éclairage inégal, vignettage et "
+                "poussières disparaissent du live, des captures et des panoramas."
+            )
+            self.take_btn.setToolTip(
+                "Sur une zone VIDE de la lame, nette et bien éclairée (histogramme vers le "
+                f"milieu, rien de saturé). Moyenne de {DEFAULT_FRAMES} images."
+            )
         st = self.ff.status()
         self.enable.blockSignals(True)
         self.enable.setChecked(self.ff.enabled)
@@ -164,7 +176,12 @@ class FlatFieldWidget(QWidget):
             )
             return
         settings().setValue("flatfield/enabled", True)
-        self.message.emit("Référence enregistrée : le fond est corrigé (live, captures, panoramas)")
+        if candidate.info.get("mode") == SUBTRACT:
+            self.message.emit(
+                "Référence enregistrée : la lumière parasite est retirée (live, captures, panoramas)"
+            )
+        else:
+            self.message.emit("Référence enregistrée : le fond est corrigé (live, captures, panoramas)")
 
     def clear(self) -> None:
         if self.ff.clear():

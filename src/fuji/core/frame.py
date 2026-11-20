@@ -25,6 +25,10 @@ class FrameMetadata:
     objective: str | None = None
     objective_na: float | None = None
     channel: str | None = None
+    #: Type du canal : « transmission » (fond clair), « fond noir », « fluorescence »…
+    contrast: str | None = None
+    #: Couleur d'affichage du canal (nom napari : green, magenta…), pour superposer les canaux.
+    channel_color: str | None = None
     x_um: float | None = None
     y_um: float | None = None
     z_um: float | None = None

@@ -14,4 +14,4 @@ Le cœur ne dépend jamais de Qt : il peut tourner sans interface (scripts, test
 ou plus tard sur un Raspberry Pi piloté à distance).
 """
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"

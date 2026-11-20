@@ -159,6 +159,21 @@ class Objective(_Model):
         return 0.61 * 0.55 / self.na
 
 
+#: types de canal : ce que l'on regarde, et donc comment régler la caméra et le fond
+CHANNEL_KINDS = ("transmission", "fond noir", "fluorescence", "réflexion")
+#: leur nom dans l'interface
+CHANNEL_KIND_NAMES = {
+    "transmission": "Fond clair",
+    "fond noir": "Fond noir",
+    "fluorescence": "Fluorescence",
+    "réflexion": "Réflexion",
+}
+#: ouverture numérique au-delà de laquelle le fond n'est plus noir, sans autre indication :
+#: condenseur de fond noir à sec (ON 0,8 à 0,95), ou à immersion (ON 1,2 à 1,4)
+DARK_FIELD_NA_DRY = 0.65
+DARK_FIELD_NA_IMMERSION = 1.0
+
+
 class LightSetting(_Model):
     on: bool = True
     intensity: float | None = Field(default=None, ge=0, le=100)
@@ -168,7 +183,7 @@ class ChannelPreset(_Model):
     """Préréglage de canal : ce qu'il faut régler pour obtenir une image donnée."""
 
     name: str
-    kind: Literal["transmission", "fluorescence", "réflexion"] = "transmission"
+    kind: Literal["transmission", "fond noir", "fluorescence", "réflexion"] = "transmission"
     exposure_ms: float | None = Field(default=None, gt=0)
     gain: float | None = None
     #: Positions des périphériques à états, ex. ``{"cubes": "GFP"}``.
@@ -185,6 +200,41 @@ class ChannelPreset(_Model):
     filter_set: str | None = None
     excitation_nm: float | None = None
     emission_nm: float | None = None
+    #: Fond noir : ouverture numérique au-delà de laquelle le fond n'est plus noir (la lumière
+    #: directe entre dans l'objectif). Vide : valeur courante selon le condenseur.
+    max_objective_na: float | None = Field(default=None, gt=0, le=1.6)
+    #: Fond noir : condenseur à immersion (une goutte d'huile entre le condenseur et la lame).
+    immersion_condenser: bool = False
+
+    @property
+    def dark_field(self) -> bool:
+        return self.kind == "fond noir"
+
+    @property
+    def kind_name(self) -> str:
+        return CHANNEL_KIND_NAMES.get(self.kind, self.kind)
+
+    def objective_limit(self) -> float | None:
+        """Fond noir : ouverture numérique maximale de l'objectif (None hors fond noir)."""
+        if not self.dark_field:
+            return None
+        if self.max_objective_na:
+            return float(self.max_objective_na)
+        return DARK_FIELD_NA_IMMERSION if self.immersion_condenser else DARK_FIELD_NA_DRY
+
+    def objective_issue(self, objective: Objective | None) -> str | None:
+        """Pourquoi cet objectif ne convient pas à ce canal (None s'il convient)."""
+        limit = self.objective_limit()
+        if limit is None or objective is None or objective.na <= limit + 1e-9:
+            return None
+        na = f"{objective.na:g}".replace(".", ",")
+        top = f"{limit:g}".replace(".", ",")
+        return (
+            f"Avec l'objectif {objective.label} (ouverture {na}), le fond ne sera pas noir : la "
+            f"lumière directe y entre. Le fond noir de ce microscope va jusqu'à une ouverture de "
+            f"{top}. Prenez un objectif moins ouvert, ou fermez le diaphragme à iris de "
+            "l'objectif s'il en a un."
+        )
 
 
 class Roles(_Model):

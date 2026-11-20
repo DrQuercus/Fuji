@@ -42,14 +42,15 @@ def test_option_names_match_constructors():
 
 def test_rename_and_remove_keep_references_consistent():
     d = MicroscopeProfile.load(builtin_profiles()["demo"]).model_dump(mode="json")
+    dapi = next(c for c in d["channels"] if c["name"] == "DAPI")
     M.rename_device(d, "cubes", "tourelle_cubes")
-    assert d["channels"][1]["states"] == {"tourelle_cubes": "DAPI"}
+    assert dapi["states"] == {"tourelle_cubes": "DAPI"}
     M.rename_device(d, "lampe", "halogene")
     assert d["roles"]["transmitted_light"] == "halogene"
     with pytest.raises(ValueError):
         M.rename_device(d, "halogene", "camera")
     M.remove_device(d, "led_365")
-    assert "led_365" not in d["channels"][1]["lights"]
+    assert "led_365" not in dapi["lights"]
     profile = MicroscopeProfile.model_validate(d)
     assert profile.check() == []
 

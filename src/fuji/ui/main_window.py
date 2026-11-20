@@ -44,6 +44,7 @@ from qtpy.QtWidgets import (
     QScrollArea,
     QSplitter,
     QStackedWidget,
+    QTabBar,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -60,7 +61,7 @@ from fuji.core.profile import MicroscopeProfile, available_profiles
 from fuji.io import save_image
 from fuji.text import count, number, plural
 
-from . import documents
+from . import composite, documents
 from .chrome import PINNED, SECTIONS, Sidebar, TopBar, mode_of, sections_of
 from .components import EmptyState, PanelHeader, icon_button, shortcut
 from .compose_panel import ComposePanel
@@ -117,8 +118,6 @@ ACQUISITION_LAYER = "Acquisition"
 DEFAULT_SECTION = {"microscope": "acquisition", "analyse": "analysis"}
 
 #: Au-delà de cette taille, un TIFF est lu à la demande au lieu d'être chargé en mémoire.
-_MEMMAP_BYTES = 1 << 30
-_CHANNEL_COLORMAPS = ("green", "magenta", "cyan", "yellow", "red", "blue")
 
 
 _scale_bar = scale_bar_of
@@ -309,7 +308,29 @@ class MainWindow(QMainWindow):
         self.display_bar.apply_requested.connect(self._apply_display)
         self.display_bar.close_requested.connect(lambda: self.close_image())
         self.display_bar.document_chosen.connect(self.show_document)
+        self.display_bar.color_image_requested.connect(lambda: self.color_image())
+        self.display_bar.tabs_elsewhere = True  # les onglets au-dessus de l'image s'en chargent
         pages[1].addWidget(self.display_bar)
+        # les images ouvertes, en onglets au-dessus de l'image : on passe de l'une à l'autre
+        self.doc_tabs = QTabBar()
+        self.doc_tabs.setObjectName("DocTabs")
+        self.doc_tabs.setDocumentMode(True)
+        self.doc_tabs.setTabsClosable(True)
+        self.doc_tabs.setExpanding(False)
+        self.doc_tabs.setUsesScrollButtons(True)
+        self.doc_tabs.setElideMode(Qt.TextElideMode.ElideMiddle)
+        self.doc_tabs.setDrawBase(False)
+        self.doc_tabs.hide()
+        self.doc_tabs.currentChanged.connect(self._doc_tab_changed)
+        self.doc_tabs.tabCloseRequested.connect(lambda i: self.close_image(self.doc_tabs.tabData(i)))
+        pages[1].insertWidget(0, self.doc_tabs)
+        self._shown_doc: str | None = None
+        self._tabs_timer = QTimer(self)
+        self._tabs_timer.setSingleShot(True)
+        self._tabs_timer.setInterval(0)
+        self._tabs_timer.timeout.connect(self._sync_doc_tabs)
+        self.viewer.layers.events.inserted.connect(self._schedule_doc_tabs)
+        self.viewer.layers.events.removed.connect(self._schedule_doc_tabs)
 
         # panneau de gauche : toujours ouvert (Contrôle, ou Images en analyse)
         self.left = QWidget()
@@ -425,6 +446,7 @@ class MainWindow(QMainWindow):
         self._set_page("layers", _scroll(self.layers_panel))
         self.gallery = GalleryPanel()
         self.gallery.open_requested.connect(self.open_capture)
+        self.gallery.superpose_requested.connect(self.superpose_captures)
         self.gallery.deleted.connect(self._on_images_deleted)
         self.gallery.renamed.connect(self._on_image_renamed)
         self.gallery.open_file_requested.connect(self.open_dialog)
@@ -495,6 +517,7 @@ class MainWindow(QMainWindow):
         self.live.stalled.connect(self.warn)
 
         self.control = MicroscopePanel(scope)
+        self.control.add_channel_requested.connect(lambda: self.edit_profile(page="ChannelsPage"))
         self.properties = PropertiesPanel(scope)
         control_tabs = QTabWidget()
         control_tabs.setDocumentMode(True)
@@ -690,7 +713,7 @@ class MainWindow(QMainWindow):
                 f"Fuji utilise « {new.profile.name} » en attendant.",
             )
 
-    def edit_profile(self, path: Path | None = None) -> None:
+    def edit_profile(self, path: Path | None = None, page: str | None = None) -> None:
         assert self.m is not None
         if path is None:
             data = self.m.profile.model_dump(mode="json")
@@ -699,6 +722,8 @@ class MainWindow(QMainWindow):
             data = MicroscopeProfile.load(path).model_dump(mode="json")
         editor = ConfigEditor(data, path, self)
         editor.saved.connect(self._after_edit)
+        if page:
+            editor.show_page(page)
         editor.exec()
 
     def new_profile(self) -> None:
@@ -880,9 +905,17 @@ class MainWindow(QMainWindow):
         mb = self.menuBar()
         m_file = mb.addMenu("&Fichier")
         m_file.addAction(self._action("Ouvrir une image…", self.open_dialog, "Ctrl+O"))
+        m_file.addAction(
+            self._action("Superposer des images (canaux)…", self.superpose_dialog, "Ctrl+Shift+O")
+        )
         m_file.addAction(self._action("Enregistrer le calque…", self.save_layer, "Ctrl+S"))
         m_file.addAction(self._action("Exporter la vue (PNG)…", self.export_view, "Ctrl+Shift+E"))
+        m_file.addAction(self._action("Image couleur des canaux", lambda: self.color_image()))
+        m_file.addSeparator()
         m_file.addAction(self._action("Fermer l'image", lambda: self.close_image(), "Ctrl+W"))
+        m_file.addAction(self._action("Fermer toutes les images", self.close_all_images, "Ctrl+Shift+W"))
+        m_file.addAction(self._action("Image suivante", lambda: self.next_document(1), "Ctrl+Alt+Right"))
+        m_file.addAction(self._action("Image précédente", lambda: self.next_document(-1), "Ctrl+Alt+Left"))
         m_file.addSeparator()
         m_file.addAction(self._action("Nouveau microscope…", self.new_profile, "Ctrl+N"))
         m_file.addAction(self._action("Modifier le microscope…", lambda: self.edit_profile(None), "Ctrl+E"))
@@ -1259,25 +1292,29 @@ class MainWindow(QMainWindow):
         info = self.gallery.add_image(image, kind="mosaique", summary=name, pixel_size_um=pixel_size_um)
         self.notify(f"{name} assemblée : {info.name}, dans la liste « Images »")
 
-    def open_capture(self, info: Any, data: np.ndarray | None = None, keep: bool = False) -> None:
-        """Ouvre une image de la liste dans l'espace Analyse, à la place de l'image ouverte
-        (``keep`` : à côté, les autres restent ouvertes et cachées). Déjà ouverte : on la
-        remontre."""
-        if info.name in documents.documents(self.viewer):
-            self.show_document(info.name)
-        elif data is None and not info.path.exists():
-            QMessageBox.warning(self, "Ouvrir", f"Fichier introuvable :\n{info.path}")
-            return
-        else:
-            if not self._make_room(keep):
+    def open_capture(self, info: Any, data: np.ndarray | None = None, keep: bool = True) -> None:
+        """Ouvre une image de la liste dans l'espace Analyse, dans un nouvel onglet : les images
+        déjà ouvertes le restent. Déjà ouverte : on la remontre. (``keep`` : gardé pour
+        compatibilité, on ne remplace plus l'image ouverte.)"""
+        doc = documents.find_path(self.viewer, info.path)
+        if doc is None:
+            if data is None and not info.path.exists():
+                QMessageBox.warning(self, "Ouvrir", f"Fichier introuvable :\n{info.path}")
                 return
+            self._make_room()
+            name = documents.unique_name(self.viewer, info.name)
             if data is not None:
                 metadata = {**info.metadata, "source": str(info.path)}
-                self.add_frame(data, info.name, metadata, info.pixel_size_um)
+                self.add_frame(data, name, metadata, info.pixel_size_um)
+                doc = name
             else:
-                self.open_file(info.path, doc=info.name, metadata=dict(info.metadata))
-            self.show_document(info.name)
+                doc = self.open_file(info.path, doc=name, metadata=dict(info.metadata))
+            if doc is None:
+                return
+            self.show_document(doc)
             self.viewer.reset_view()
+        else:
+            self.show_document(doc)
         if self.mode != "analyse":
             self.set_mode("analyse", "analysis")
 
@@ -1286,26 +1323,174 @@ class MainWindow(QMainWindow):
         """Affiche une des images ouvertes ; les autres restent ouvertes, cachées."""
         if doc in documents.documents(self.viewer):
             documents.show_only(self.viewer, doc)
+            self._shown_doc = doc
+            self.display_bar.refresh_target()
+        self._schedule_doc_tabs()
 
-    def _make_room(self, keep: bool) -> bool:
-        """Avant d'ouvrir une image : ferme celles qui sont ouvertes (ou les cache si
-        ``keep``). Faux si l'utilisateur annule."""
+    def _schedule_doc_tabs(self, *_: Any) -> None:
+        self._tabs_timer.start()
+
+    def _displayed_doc(self) -> str | None:
         docs = documents.documents(self.viewer)
-        if not docs and not self.viewer.layers:
-            return True
-        if not keep:
-            choice = self._confirm_close(docs, opening=True)
-            if choice == "cancel":
-                return False
-            keep = choice == "keep"
-        if keep:
-            for layer in self.viewer.layers:
-                if documents.doc_of(layer) is not None:
-                    layer.visible = False
-        else:
-            self.analysis.leave()
-            documents.close(self.viewer, docs)
+        if self._shown_doc in docs:
+            return self._shown_doc
+        self._shown_doc = documents.shown(self.viewer)
+        return self._shown_doc
+
+    def _sync_doc_tabs(self) -> None:
+        """Les onglets suivent les images ouvertes ; la liste « Images » marque celles-ci."""
+        try:
+            tabs = self.doc_tabs
+        except RuntimeError:  # fenêtre fermée
+            return
+        docs = documents.documents(self.viewer)
+        tabs.blockSignals(True)
+        try:
+            if [tabs.tabData(i) for i in range(tabs.count())] != docs:
+                while tabs.count():
+                    tabs.removeTab(0)
+                for doc in docs:
+                    i = tabs.addTab(doc)
+                    tabs.setTabData(i, doc)
+            for i, doc in enumerate(docs):
+                channels = documents.channels_of(self.viewer, doc)
+                path = documents.path_of(self.viewer, doc)
+                tip = [doc, path or "image calculée dans Fuji"]
+                if len(channels) > 1:
+                    tip.append("Canaux : " + ", ".join(documents.channel_name(c) for c in channels))
+                tabs.setTabToolTip(i, "\n".join(tip))
+            current = self._displayed_doc()
+            if current in docs:
+                tabs.setCurrentIndex(docs.index(current))
+        finally:
+            tabs.blockSignals(False)
+        tabs.setVisible(bool(docs))
+        opened = {p for d in docs if (p := documents.path_of(self.viewer, d))}
+        self.gallery.set_open(opened)
+
+    def _doc_tab_changed(self, index: int) -> None:
+        doc = self.doc_tabs.tabData(index)
+        if doc:
+            self.show_document(str(doc))
+
+    def _make_room(self, keep: bool = True) -> bool:
+        """Avant d'ouvrir une image : au-delà de :data:`documents.MAX_OPEN` images ouvertes,
+        la plus ancienne qui n'a pas de résultat est refermée (elle se rouvre d'un
+        double-clic). Les autres restent ouvertes."""
+        docs = documents.documents(self.viewer)
+        while len(docs) >= documents.MAX_OPEN:
+            displayed = documents.shown(self.viewer)
+            idle = next(
+                (d for d in docs if d != displayed and not documents.results_lost(self.viewer, [d])), None
+            )
+            if idle is None:
+                break
+            documents.close(self.viewer, [idle])
+            self.notify(f"{idle} refermée ({documents.MAX_OPEN} images ouvertes au plus)")
+            docs = documents.documents(self.viewer)
         return True
+
+    # ------------------------------------------------------------ superposition
+    def superpose_captures(self, infos: list[Any]) -> str | None:
+        """Superpose des images de la liste (une par canal : DAPI, GFP, fond clair…) en une
+        image à plusieurs canaux, chacun dans sa couleur. Renvoie son nom."""
+        from fuji.analysis.channels import ChannelImage, channel_plane
+
+        if len(infos) < 2:
+            self.notify("Choisissez au moins deux images à superposer (⌘ ou Ctrl + clic)")
+            return None
+        channels: list[ChannelImage] = []
+        px: float | None = None
+        for info in infos:
+            data = self.gallery.data_of(info)
+            md = dict(info.metadata or {})
+            if data is None:
+                try:
+                    loaded = composite.read_file(info.path)
+                except Exception as exc:
+                    QMessageBox.warning(self, "Superposer", f"« {info.name} » ne peut pas être lue : {exc}")
+                    return None
+                split = composite.split_channels(loaded, self._channel_lookup, md)
+                if split is not None:  # une acquisition à plusieurs canaux : tous y passent
+                    channels.extend(split)
+                    px = px or loaded.pixel_size_um
+                    continue
+                data = loaded.data
+                px = px or loaded.pixel_size_um
+            px = px or info.pixel_size_um
+            name = str(md.get("channel") or info.name)
+            kind, color, emission = self._channel_lookup(name)
+            if emission and "emission_nm" not in md:
+                md["emission_nm"] = emission
+            channels.append(
+                channel_plane(
+                    data,
+                    name,
+                    kind=md.get("contrast") or kind,
+                    color=md.get("channel_color") or color,
+                    taken=[c.color for c in channels],
+                    metadata={**md, "channel_source": str(info.path)},
+                )
+            )
+        return self._add_superposition(channels, px)
+
+    def superpose_paths(self, paths: list[str]) -> str | None:
+        """« Superposer des fichiers… » : comme depuis la liste, pour des fichiers choisis."""
+        from fuji.io.captures import CaptureInfo
+
+        infos = []
+        for path in paths:
+            p = Path(path)
+            infos.append(CaptureInfo(p, metadata=composite.sidecar_metadata(p)))
+        return self.superpose_captures(infos)
+
+    def _add_superposition(self, channels: list[Any], px: float | None) -> str | None:
+        shapes = {(c.plane_shape, c.data.ndim - (3 if c.rgb else 2)) for c in channels}
+        if len(shapes) > 1:
+            sizes = " ; ".join(f"{c.name} : {c.plane_shape[1]}×{c.plane_shape[0]}" for c in channels)
+            QMessageBox.warning(
+                self,
+                "Superposer",
+                "Ces images n'ont pas la même taille : elles ne peuvent pas être superposées.\n\n"
+                f"{sizes}\n\nPrenez-les avec la même résolution de caméra.",
+            )
+            return None
+        seen: dict[str, int] = {}
+        for c in channels:  # deux « Fond clair » : on les distingue
+            seen[c.name] = seen.get(c.name, 0) + 1
+            if seen[c.name] > 1:
+                c.name = f"{c.name} {seen[c.name]}"
+        names = " + ".join(c.name for c in channels)
+        self._make_room()
+        doc = documents.unique_name(self.viewer, names if len(names) <= 40 else "Superposition")
+        composite.add_channels(self.viewer, doc, channels, pixel_size_um=px)
+        self.show_document(doc)
+        self.viewer.reset_view()
+        if self.mode != "analyse":
+            self.set_mode("analyse", "analysis")
+        self.notify(
+            f"{doc} : {count(len(channels), 'canal', 'canaux')} superposés — réglez chacun sous l'image"
+        )
+        return doc
+
+    def color_image(self, doc: str | None = None) -> str | None:
+        """Fait de l'image à plusieurs canaux affichée une image couleur, telle qu'on la voit
+        (pour une figure) : elle s'ouvre à côté, à enregistrer ou à exporter."""
+        doc = doc or documents.shown(self.viewer)
+        if doc is None:
+            return None
+        try:
+            rgb = composite.flatten(self.viewer, doc)
+        except Exception as exc:
+            QMessageBox.warning(self, "Image couleur", f"L'image couleur n'a pas pu être faite : {exc}")
+            return None
+        first = documents.channels_of(self.viewer, doc)[0]
+        name = documents.unique_name(self.viewer, f"{doc} (couleur)")
+        self.add_frame(rgb, name, {"from": doc}, first.metadata.get("pixel_size_um"))
+        self.viewer.layers[name].contrast_limits = (0, 255)
+        self.show_document(name)
+        self.notify(f"{name} : image couleur prête (Fichier → Enregistrer le calque, ou Exporter la vue)")
+        return name
 
     def close_image(self, doc: str | None = None) -> bool:
         """« Fermer » : l'image affichée et ses résultats (masques, aperçus...). Avec la
@@ -1445,6 +1630,32 @@ class MainWindow(QMainWindow):
                 self.gallery.add_existing(f, "acquisition", f"{summary.acquired} images")
             self.notify(f"Acquisition terminée : {summary.acquired} images, dans la liste « Images »")
 
+    def superpose_dialog(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Superposer des images (une par canal)",
+            str(self.gallery.store.root if self.gallery.store.root.exists() else Path.home()),
+            "Images (*.tif *.tiff *.png *.jpg *.jpeg *.bmp);;Tous les fichiers (*)",
+        )
+        if paths:
+            self.superpose_paths(paths)
+
+    def close_all_images(self) -> None:
+        docs = documents.documents(self.viewer)
+        if not docs or self._confirm_close(docs) == "cancel":
+            return
+        self.analysis.leave()
+        documents.close(self.viewer, docs)
+        self.notify(f"{count(len(docs), 'image')} {plural(len(docs), 'fermée')}")
+
+    def next_document(self, step: int) -> None:
+        docs = documents.documents(self.viewer)
+        if len(docs) < 2:
+            return
+        current = self._displayed_doc()
+        i = docs.index(current) if current in docs else 0
+        self.show_document(docs[(i + step) % len(docs)])
+
     def open_dialog(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
             self,
@@ -1456,47 +1667,38 @@ class MainWindow(QMainWindow):
             self.open_paths(paths)
 
     def open_paths(self, paths: list[str]) -> None:
-        """Ouvre des fichiers image dans Analyse : le premier remplace l'image ouverte, les
-        suivants s'ouvrent à côté."""
+        """Ouvre des fichiers image dans Analyse, chacun dans son onglet (un fichier déjà
+        ouvert est remontré)."""
         doc = None
-        for i, path in enumerate(paths):
-            if not self._make_room(keep=i > 0):
-                break
+        for path in paths:
+            existing = documents.find_path(self.viewer, path)
+            if existing is not None:
+                doc = existing
+                continue
+            self._make_room()
             doc = self.open_file(path) or doc
         if doc is not None:
             self.show_document(doc)
             self.viewer.reset_view()
             self.set_mode("analyse")
 
+    def _channel_lookup(self, name: str) -> tuple[str | None, str | None, float | None]:
+        """Ce que la configuration dit d'un canal : (type, couleur, émission)."""
+        ch = self.m.profile.channel(name) if self.m is not None else None
+        if ch is None:
+            return None, None, None
+        return ch.kind, ch.color, ch.emission_nm
+
     def open_file(
         self, path: str | Path, doc: str | None = None, metadata: dict[str, Any] | None = None
     ) -> str | None:
-        """Ajoute un fichier image à l'espace Analyse ; renvoie le nom de l'image ouverte
-        (tous ses canaux forment une seule image, qui se ferme d'un bloc). ``metadata`` :
-        renseignements connus par ailleurs (liste « Images »), joints à l'image."""
-        from fuji.analysis.image import read_pixel_size_um
-
+        """Ajoute un fichier image à l'espace Analyse ; renvoie le nom de l'image ouverte.
+        Une image à plusieurs canaux s'ouvre en canaux superposés, chacun dans sa couleur
+        (ils forment une seule image, qui se ferme d'un bloc). ``metadata`` : renseignements
+        connus par ailleurs (liste « Images »), joints à l'image."""
         path = Path(path)
         try:
-            if path.suffix.lower() in (".tif", ".tiff"):
-                import tifffile
-
-                with tifffile.TiffFile(path) as tif:
-                    series = tif.series[0]
-                    axes = series.axes
-                    px = read_pixel_size_um(tif)
-                    data = None
-                    if series.size * series.dtype.itemsize > _MEMMAP_BYTES:
-                        try:  # grande acquisition : les plans sont lus à la demande
-                            data = tifffile.memmap(path, mode="r")
-                        except Exception:  # fichier compressé ou en mosaïque
-                            data = None
-                    if data is None:
-                        data = series.asarray()
-            else:
-                from skimage import io
-
-                data, axes, px = io.imread(path), "", None
+            loaded = composite.read_file(path)
         except Exception as exc:
             log.warning("Lecture de %s impossible : %s", path, exc)
             QMessageBox.warning(
@@ -1506,47 +1708,32 @@ class MainWindow(QMainWindow):
                 f"JPEG, BMP ; pour les autres, passez par Fiji.\n\nDétail : {exc}",
             )
             return None
-        rgb = axes.endswith("S") or (not axes and is_rgb(data))
-        name = path.stem.replace(".ome", "")
+        data, axes, px, rgb = loaded.data, loaded.axes, loaded.pixel_size_um, loaded.rgb
+        doc = doc or documents.unique_name(self.viewer, path.stem.replace(".ome", ""))
+        md = {**composite.sidecar_metadata(path), **(metadata or {})}
+        channels = composite.split_channels(loaded, self._channel_lookup, md)
+        if channels is not None:
+            composite.add_channels(
+                self.viewer, doc, channels, pixel_size_um=px, metadata=md, source=str(path)
+            )
+            self.notify(f"Ouvert : {path.name} — {count(len(channels), 'canal', 'canaux')} superposés")
+            return doc
+        if "C" in axes:  # un seul canal : l'axe ne sert à rien
+            data = np.take(data, 0, axis=axes.index("C"))
         scale = [1.0] * (data.ndim - (1 if rgb else 0))
         if px:
             scale[-1] = scale[-2] = px
         kwargs: dict[str, Any] = {"rgb": rgb}
-        if "C" in axes and not rgb:
-            c_axis = axes.index("C")
-            scale.pop(c_axis)
-            if isinstance(data, np.memmap):
-                # un calque par canal, sans copie (napari chargerait tout en mémoire)
-                planes = [data[(slice(None),) * c_axis + (i,)] for i in range(data.shape[c_axis])]
-                layers = [
-                    self.viewer.add_image(
-                        plane,
-                        name=f"{name} [C{i + 1}]",
-                        scale=scale,
-                        units=("µm",) * len(scale) if px else None,
-                        blending="additive",
-                        colormap=_CHANNEL_COLORMAPS[i % len(_CHANNEL_COLORMAPS)],
-                    )
-                    for i, plane in enumerate(planes)
-                ]
-            else:
-                kwargs["channel_axis"] = c_axis
-                layers = None
-        else:
-            layers = None
-        if layers is None:
-            if px:
-                kwargs["units"] = ("µm",) * len(scale)
-            if data.ndim == (3 if rgb else 2) and not isinstance(data, np.memmap):
-                # même contraste que pour une image qui vient d'être prise (centiles robustes)
-                kwargs["contrast_limits"] = contrast_for(data, None)
-            layers = self.viewer.add_image(data, name=name, scale=scale, **kwargs)
-        doc = doc or name
-        for layer in layers if isinstance(layers, list) else [layers]:
-            layer.metadata.update(metadata or {})
-            layer.metadata["pixel_size_um"] = px
-            layer.metadata["source"] = str(path)
-            documents.tag(layer, doc, source=True)
+        if px:
+            kwargs["units"] = ("µm",) * len(scale)
+        if data.ndim == (3 if rgb else 2) and not isinstance(data, np.memmap):
+            # même contraste que pour une image qui vient d'être prise (centiles robustes)
+            kwargs["contrast_limits"] = contrast_for(data, md.get("bit_depth"))
+        layer = self.viewer.add_image(data, name=doc, scale=scale, **kwargs)
+        layer.metadata.update(md)
+        layer.metadata["pixel_size_um"] = px
+        layer.metadata["source"] = str(path)
+        documents.tag(layer, doc, source=True)
         self.notify(f"Ouvert : {path.name}")
         return doc
 

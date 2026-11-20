@@ -4,7 +4,7 @@ Logiciel de microscopie qui réunit le meilleur de **Micro-Manager** (piloter le
 matériel), **napari** (afficher les images) et **Fiji/ImageJ** (analyser), dans une
 interface propre qui s'adapte au microscope.
 
-> Projet en développement (version 1.1). Voir
+> Projet en développement (version 1.2). Voir
 > [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) et [docs/FEUILLE_DE_ROUTE.md](docs/FEUILLE_DE_ROUTE.md).
 
 ![Interface de Fuji : espace Microscope, live sur le microscope simulé](docs/interface.png)
@@ -29,15 +29,26 @@ l'image reprend exposition, gain, objectif et canal.
 
 Chaque capture (bouton **Capturer**, Ctrl+K) est **enregistrée automatiquement** dans
 `~/Fuji/Captures/<date>` et rejoint la liste **Images**, commune aux deux espaces : un
-double-clic l'ouvre dans Analyse. On peut y renommer ou supprimer les images.
+double-clic l'ouvre dans Analyse. On peut y renommer ou supprimer les images, et revenir
+aux images **des jours précédents** (liste des jours au-dessus).
 
-Dans Analyse, **une image à la fois** : ouvrir une image de la liste **remplace** celle qui
-est ouverte, avec ses résultats (Fuji demande avant de fermer des masques ou des ROI). Pour
-en garder plusieurs ouvertes (comparer, calculer entre deux images) : clic droit →
-« Ouvrir à côté » ; on choisit alors l'image affichée dans la barre sous l'image. Le
-bouton **Fermer** de cette barre (Ctrl+W) ferme l'image affichée et ses résultats.
+Dans Analyse, chaque image ouverte a son **onglet**, au-dessus de l'image : ouvrir une image
+ne ferme pas les autres (leur nom est en gras dans la liste), un clic sur un onglet passe
+de l'une à l'autre — chacune garde ses résultats, ses masques et ses réglages —, la croix
+de l'onglet (ou Ctrl+W) la ferme. Rouvrir une image déjà ouverte remontre son onglet.
+
+**Superposer des canaux** (DAPI, GFP, fond clair…) : dans la liste, choisissez une image
+par canal (⌘ ou Ctrl + clic), puis **Superposer**. Chaque canal prend sa couleur (celle de
+la configuration, ou d'après le nom du fluorochrome) ; une capture couleur de
+fluorescence est ramenée à la couleur de la caméra qui porte le signal, un fond clair reste
+en couleur, en dessous. Sous l'image, une pastille par canal : la case le montre ou le
+cache, un clic le choisit pour régler son contraste, un clic droit change sa couleur.
+**Image couleur** en fait une image telle qu'on la voit, pour une figure. Une acquisition
+à plusieurs canaux s'ouvre directement superposée.
 
 ![Espace Analyse : la liste des images reste ouverte à côté des outils](docs/images-prises.png)
+
+![Canaux superposés : une pastille par canal sous l'image, chacun dans sa couleur](docs/canaux.png)
 
 La fenêtre tient sur un portable : environ 1050 pixels de large au minimum avec les deux
 panneaux, 750 en repliant celui de gauche (la barre du haut se compacte, la barre sous
@@ -120,8 +131,19 @@ simulé, vide, copie de l'actuel). L'éditeur couvre **tout** le profil :
 | Rôles | caméra, platine XY, mise au point, revolver, lampe de transmission |
 | Objectifs | grossissement, ON, immersion, contraste, correction, anneau de phase, distance de travail, pixel calibré, parfocalité (+ modèles courants) |
 | Cubes de fluorescence | excitation, dichroïque, émission (+ modèles, dont les blocs Leitz Ploemopak A, I3, N2.1) ; un clic crée la tourelle de cubes, la lampe et un canal par cube |
-| Canaux | type, cube, exposition, gain, couleur, longueurs d'onde, position de chaque tourelle, état de chaque lampe, obturateurs, préréglage Micro-Manager |
+| Canaux | type (fond clair, fond noir, fluorescence, réflexion), cube, exposition, gain, couleur, longueurs d'onde, position de chaque tourelle, état de chaque lampe, obturateurs, préréglage Micro-Manager ; « Fond noir » crée en un clic un canal de fond noir prêt à l'emploi |
 | Fichier YAML | le profil complet, modifiable directement |
+
+**Fond noir** : un type de canal à part entière. Fuji dit quand tourner le condenseur,
+allume la lampe à fond, et prévient si l'objectif en place est trop ouvert pour que le
+fond reste noir (au-delà d'une ouverture de 0,65 avec un condenseur à sec, 1,0 à
+immersion — valeur réglable). L'exposition automatique vise les objets brillants sans les
+saturer ; l'image de référence y retire la lumière parasite (reflets des poussières) au lieu
+de diviser par une zone vide, qui est noire ; Köhler et l'analyse de l'éclairage
+demandent de repasser en fond clair. Dans le panneau Contrôle, la liste des canaux se
+termine par « Ajouter un canal (fond noir…) », qui ouvre directement la bonne page.
+
+![Fond noir : live, conseils et objectifs permis dans le panneau Contrôle](docs/fond-noir.png)
 
 « Vérifier » signale les incohérences (rôle mal attribué, position inexistante...),
 « Tester la connexion » connecte le matériel et fait une capture d'essai.
@@ -295,9 +317,9 @@ ouverture numérique, calibration), canaux (fond clair, DAPI, GFP...). Profils f
 
 | Profil | Description |
 |---|---|
-| `demo` | Microscope simulé motorisé, fond clair + fluorescence |
+| `demo` | Microscope simulé motorisé, fond clair, fond noir et fluorescence |
 | `motorise-simulation` | Motorisation maison simulée : platine, mise au point et LED sur un faux contrôleur GRBL |
-| `leitz-diaplan-touptek` | Leitz Diaplan manuel + ToupTek E3ISPM08300KPD |
+| `leitz-diaplan-touptek` | Leitz Diaplan manuel + ToupTek E3ISPM08300KPD, fond clair et fond noir |
 | `micromanager-exemple` | N'importe quelle configuration Micro-Manager |
 
 Les calibrations sont enregistrées dans `~/.fuji/profiles/` sans jamais modifier les
@@ -306,7 +328,7 @@ profils fournis.
 ## État de validation
 
 Le code a été entièrement relu et chaque défaut corrigé est couvert par un test
-(environ 370 tests, lancés à chaque modification sous Linux **et sur macOS**). L'application
+(environ 390 tests, lancés à chaque modification sous Linux **et sur macOS**). L'application
 Mac est construite puis essayée automatiquement sur des Mac de GitHub (processeurs Apple
 et Intel) avant d'être proposée au téléchargement.
 

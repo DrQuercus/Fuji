@@ -131,7 +131,7 @@ MENUS: tuple[Menu, ...] = (
         "couleurs",
         "Couleurs et canaux",
         "channels",
-        "Gris, séparer ou fusionner les canaux, colorants",
+        "Gris, séparer ou fusionner les canaux, colorants (superposer : liste « Images »)",
         (
             "Niveaux de gris",
             "Séparer les canaux",
@@ -413,7 +413,9 @@ HELP: dict[str, Help] = {
     ),
     "Fusionner en RGB": Help(
         "Assemble jusqu'à trois images en une image couleur",
-        "Superposer des canaux de fluorescence pour une figure.",
+        "Faire d'images déjà ouvertes une image rouge-vert-bleu figée. Pour superposer des "
+        "canaux de fluorescence et les régler un par un : liste « Images », choisissez une "
+        "image par canal (⌘ ou Ctrl + clic), puis « Superposer ».",
     ),
     "Déconvolution des couleurs": Help(
         "Sépare les colorants d'une lame (H&E, DAB…)",

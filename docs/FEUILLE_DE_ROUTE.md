@@ -307,11 +307,49 @@ Limites connues : un aperçu long ne peut pas être interrompu (le suivant le re
 mesure à côté d'une forme à cheval sur le bord de l'image compte la partie hors de l'image,
 le tableau non.
 
+## Version 1.2 (fait) — canaux superposés, plusieurs images, fond noir
+
+Retour d'essai : « je n'ai pas réussi à superposer facilement les canaux » ; l'ouverture
+des images « un peu bancale, surtout avec plusieurs images » ; le fond noir absent des
+canaux.
+
+- [x] **Superposer des canaux** : une image par canal choisie dans la liste, puis
+      « Superposer ». Couleur de chaque canal d'après la configuration, la longueur d'onde
+      ou le nom du fluorochrome (DAPI bleu, GFP vert, TRITC rouge, Cy5 magenta…) ; une
+      capture couleur de fluorescence ramenée à la couleur de la caméra qui porte son
+      signal ; le fond clair en dessous, en couleur. Images de tailles différentes refusées
+      avec une explication
+- [x] **Une acquisition à plusieurs canaux** s'ouvre superposée (noms et couleurs des
+      canaux lus dans le fichier) ; avec la caméra couleur, ses canaux restaient avant une
+      pile à faire défiler
+- [x] **Régler chaque canal** sous l'image : une pastille par canal (montrer / cacher,
+      choisir celui que règlent l'histogramme et le contraste, couleur au clic droit,
+      « montrer seul ») ; « Auto (tous) » ; **Image couleur** telle qu'on la voit, pour une
+      figure
+- [x] **Onglets** des images ouvertes : ouvrir une image ne ferme plus la précédente ; on
+      passe de l'une à l'autre d'un clic, chaque image garde ses résultats et l'état de ses
+      calques (un masque caché le reste) ; une image cachée se ferme sans changer l'image
+      affichée ; au-delà de 12 images, la plus ancienne sans résultat se referme
+- [x] **Images identifiées par leur fichier** : deux « capture_001 » de jours différents
+      s'ouvraient comme une seule ; un fichier déjà ouvert est remontré au lieu d'être
+      rouvert. La liste « Images » met en gras les images ouvertes et montre aussi les
+      **jours précédents**
+- [x] **Fond noir** : type de canal avec sa contrainte (ouverture de l'objectif, réglable),
+      conseils dans le panneau Contrôle, avertissement avant une acquisition, exposition
+      automatique adaptée, référence de fond qui retire la lumière parasite, balance des
+      blancs et assistants renvoyés au fond clair, bouton « Fond noir » dans l'éditeur,
+      fond noir simulé dans le microscope de démonstration
+- [x] Configurations fournies : le Leitz Diaplan et la démonstration ont un condenseur
+      (« Fond clair » / « Fond noir ») et un canal « Fond noir »
+
+À valider sur le vrai microscope : l'ouverture limite de ton condenseur de fond noir (0,65
+par défaut) et l'exposition de départ (200 ms).
+
 ## Prochaines étapes
 
 ### 1. Valider sur ton matériel (priorité)
 
-Tout ce qui précède est vérifié par environ 370 tests automatiques, mais **sur du
+Tout ce qui précède est vérifié par environ 390 tests automatiques, mais **sur du
 matériel simulé**. Voici ce qui n'a jamais pu être essayé et reste à valider :
 
 - [x] **La vraie caméra** : la E3ISPM08300KPD se connecte et l'image arrive (Mac)

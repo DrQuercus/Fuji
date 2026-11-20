@@ -317,6 +317,108 @@ def _fmt(v: float) -> str:
     return f"{v:.3g}".replace(".", ",")
 
 
+def _dot(color: QColor, size: int = 12) -> Any:
+    """Une pastille ronde de cette couleur (icône d'un canal)."""
+    from qtpy.QtGui import QIcon, QPixmap
+
+    pix = QPixmap(size * 2, size * 2)
+    pix.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(QPen(QColor(0, 0, 0, 90), 1.5))
+    painter.setBrush(color)
+    painter.drawEllipse(QRectF(2, 2, size * 2 - 4, size * 2 - 4))
+    painter.end()
+    pix.setDevicePixelRatio(2.0)
+    return QIcon(pix)
+
+
+def channel_qcolor(layer: Any) -> QColor:
+    """La couleur d'un canal à l'écran (celle de ses pixels les plus clairs)."""
+    if getattr(layer, "rgb", False):
+        return QColor("#d9d9d9")
+    try:
+        r, g, b = (float(v) for v in np.asarray(layer.colormap.colors)[-1][:3])
+        return QColor.fromRgbF(r, g, b)
+    except Exception:
+        return QColor("#d9d9d9")
+
+
+class ChannelChip(QWidget):
+    """Un canal d'une image : une case pour le montrer ou le cacher, et son nom, dans sa
+    couleur. Un clic sur le nom choisit le canal que règle la barre ; un clic droit change sa
+    couleur."""
+
+    chosen = Signal(object)
+    #: « Montrer seul » : ce canal, sans les autres
+    solo = Signal(object)
+
+    def __init__(self, layer: Any, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.layer = layer
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(2)
+        self.eye = QCheckBox()
+        self.eye.setToolTip("Montrer / cacher ce canal")
+        self.eye.toggled.connect(self._toggled)
+        self.name = QPushButton(documents.channel_name(layer))
+        self.name.setObjectName("chip")
+        self.name.setCheckable(True)
+        self.name.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.name.setToolTip(
+            "Régler ce canal (contraste, luminosité…) ; clic droit : sa couleur, le montrer seul"
+        )
+        self.name.clicked.connect(lambda: self.chosen.emit(self.layer))
+        self.name.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.name.customContextMenuRequested.connect(self._menu)
+        lay.addWidget(self.eye)
+        lay.addWidget(self.name)
+        self.refresh(False)
+
+    def _toggled(self, on: bool) -> None:
+        if bool(self.layer.visible) != on:
+            self.layer.visible = on
+
+    def refresh(self, current: bool) -> None:
+        self.eye.blockSignals(True)
+        self.eye.setChecked(bool(self.layer.visible))
+        self.eye.blockSignals(False)
+        self.name.setChecked(current)
+        self.name.setIcon(_dot(channel_qcolor(self.layer)))
+
+    def _menu(self, pos: Any) -> None:
+        from fuji.analysis.channels import COLOR_NAMES, COLORS
+
+        menu = QMenu(self)
+        if not getattr(self.layer, "rgb", False):
+            current = str(getattr(self.layer.colormap, "name", ""))
+            for color in COLORS:
+                act = menu.addAction(_dot(QColor(_SWATCH.get(color, "#cccccc"))), COLOR_NAMES[color])
+                act.setCheckable(True)
+                act.setChecked(current == color)
+                act.triggered.connect(lambda _=False, c=color: self.set_color(c))
+            menu.addSeparator()
+        menu.addAction("Montrer ce canal seul", lambda: self.solo.emit(self.layer))
+        menu.exec(self.name.mapToGlobal(pos))
+
+    def set_color(self, color: str) -> None:
+        self.layer.colormap = color
+        self.refresh(self.name.isChecked())
+
+
+#: couleurs des pastilles du menu (celles des tables de couleurs)
+_SWATCH = {
+    "blue": "#3b6cff",
+    "cyan": "#22d3ee",
+    "green": "#22c55e",
+    "yellow": "#facc15",
+    "red": "#ef4444",
+    "magenta": "#e040fb",
+    "gray": "#d0d4da",
+}
+
+
 def _group(title: str, *widgets: QWidget, row: bool = True) -> QWidget:
     box = QWidget()
     lay = QVBoxLayout(box)
@@ -458,6 +560,8 @@ class DisplayBar(QWidget):
     document_chosen = Signal(str)
     #: « Appliquer aux pixels » : nom du calque, noir, blanc, gamma
     apply_requested = Signal(str, float, float, float)
+    #: « Image couleur » : faire de l'image à plusieurs canaux une image couleur
+    color_image_requested = Signal()
 
     def __init__(
         self,
@@ -474,6 +578,8 @@ class DisplayBar(QWidget):
         self.setSizePolicy(policy)
         self.viewer = viewer
         self.layer: ImageLayer | None = None
+        #: les images ouvertes sont montrées ailleurs (onglets de la fenêtre) : pas de liste ici
+        self.tabs_elsewhere = False
         self._plane: np.ndarray | None = None
         self._data_range = (0.0, 1.0)
         #: bornes du contraste de chaque image à son ouverture (clé : identité du calque)
@@ -489,6 +595,32 @@ class DisplayBar(QWidget):
         self._more_chosen = prefs.contains("display/more")
         lay = FlowLayout(self, spacing=16, line_spacing=8)
         lay.setContentsMargins(14, 8, 14, 8)
+
+        # ---- les canaux d'une image à plusieurs canaux (DAPI, GFP…) ----------------------
+        self.channels_box = QWidget()
+        cb = QVBoxLayout(self.channels_box)
+        cb.setContentsMargins(0, 0, 0, 0)
+        cb.setSpacing(3)
+        cb.addWidget(section_title("Canaux"))
+        self._chips_host = QWidget()
+        self._chips_lay = FlowLayout(self._chips_host, spacing=6, line_spacing=4)
+        self._chips_lay.setContentsMargins(0, 0, 0, 0)
+        cb.addWidget(self._chips_host)
+        self.all_auto_btn = button(
+            "Auto (tous)", tooltip="Contraste automatique de chaque canal (affichage seulement)"
+        )
+        self.all_auto_btn.clicked.connect(self.auto_all_channels)
+        self.color_btn = button(
+            "Image couleur",
+            "save",
+            tooltip="Une image couleur telle qu'on la voit (canaux visibles, couleurs et contrastes) : "
+            "pour une figure. Elle s'ouvre à côté, à enregistrer",
+        )
+        self.color_btn.clicked.connect(self.color_image_requested.emit)
+        cb.addWidget(_row(self.all_auto_btn, self.color_btn))
+        self.channels_box.hide()
+        self._chips: list[ChannelChip] = []
+        lay.addWidget(self.channels_box)
 
         # ---- l'image réglée, le zoom ------------------------------------------------
         self.name_label = label("Aucune image", "ToolTitle", wrap=False)
@@ -945,6 +1077,10 @@ class DisplayBar(QWidget):
                 self._style_mask(layer)
         self._retarget()
 
+    def refresh_target(self) -> None:
+        """Une autre image est affichée : la barre se recale sur elle (canaux compris)."""
+        self._layers_timer.start()
+
     def _retarget(self, *_: Any) -> None:
         layer = self._target()
         self._sync_docs()
@@ -1026,9 +1162,15 @@ class DisplayBar(QWidget):
         self._sync_mask()
 
     def _sync_docs(self) -> None:
-        """Liste des images ouvertes (montrée quand il y en a plusieurs)."""
+        """Liste des images ouvertes (montrée quand il y en a plusieurs), canaux de l'image."""
+        self._sync_channels()
         docs = documents.documents(self.viewer)
         current = documents.doc_of(self.layer) if self.layer is not None else None
+        if self.tabs_elsewhere:  # les onglets de la fenêtre montrent les images ouvertes
+            self.doc_combo.hide()
+            self.close_btn.hide()
+            self.name_label.show()
+            return
         self.doc_combo.blockSignals(True)
         self.doc_combo.clear()
         for doc in docs:
@@ -1041,6 +1183,70 @@ class DisplayBar(QWidget):
         self.name_label.setVisible(not several)
         self.close_btn.setVisible(bool(self.viewer.layers))
 
+    # ------------------------------------------------------------------ canaux
+    def channel_layers(self) -> list[Any]:
+        """Les canaux de l'image affichée (vide pour une image à un seul canal)."""
+        doc = documents.doc_of(self.layer) if self.layer is not None else None
+        if doc is None:
+            return []
+        channels = documents.channels_of(self.viewer, doc)
+        return channels if len(channels) > 1 else []
+
+    def _sync_channels(self) -> None:
+        channels = self.channel_layers()
+        if [c.layer for c in self._chips] != channels:
+            for chip in self._chips:
+                self._chips_lay.removeWidget(chip)
+                chip.deleteLater()
+            self._chips = []
+            for layer in channels:
+                chip = ChannelChip(layer)
+                chip.chosen.connect(self.choose_channel)
+                chip.solo.connect(self.solo_channel)
+                layer.events.visible.connect(self._refresh_chips)
+                layer.events.colormap.connect(self._refresh_chips)
+                self._chips_lay.addWidget(chip)
+                self._chips.append(chip)
+        self._refresh_chips()
+        self.channels_box.setVisible(bool(channels))
+
+    def _refresh_chips(self, *_: Any) -> None:
+        for chip in self._chips:
+            try:
+                chip.refresh(chip.layer is self.layer)
+            except RuntimeError:  # pastille détruite entre-temps
+                pass
+
+    def choose_channel(self, layer: Any) -> None:
+        """Le canal que règlent l'histogramme, le contraste, la luminosité…"""
+        if not layer.visible:
+            layer.visible = True
+        self.viewer.layers.selection.active = layer
+
+    def solo_channel(self, layer: Any) -> None:
+        for other in self.channel_layers():
+            other.visible = other is layer
+        self.choose_channel(layer)
+
+    def auto_all_channels(self) -> None:
+        """Contraste automatique de chaque canal de l'image (affichage seulement)."""
+        from .panels.analysis_panel import displayed_plane
+
+        for layer in self.channel_layers():
+            try:
+                plane, _ = displayed_plane(layer, self.viewer)
+            except Exception:
+                continue
+            plane = _sample(np.asarray(plane), bool(layer.rgb))
+            if layer.rgb and plane.ndim == 3:
+                plane = plane[..., :3]
+            lo, hi = auto_limits(plane, self.auto_saturation)
+            lo_r, hi_r = (float(v) for v in layer.contrast_limits_range)
+            if lo < lo_r or hi > hi_r:
+                layer.contrast_limits_range = (min(lo, lo_r), max(hi, hi_r))
+            layer.contrast_limits = (lo, hi)
+        self.message.emit("Contraste automatique de chaque canal (affichage seulement)")
+
     def _sync_info(self, *_: Any) -> None:
         layer = self.layer
         self._sync_docs()
@@ -1048,7 +1254,10 @@ class DisplayBar(QWidget):
             self.name_label.setText("Aucune image")
             self.info_label.setText("Ouvrez une image (liste à gauche)")
             return
-        self.name_label.setText(_elide(layer.name, 26))
+        if self.channel_layers():  # image à plusieurs canaux : le canal que l'on règle
+            self.name_label.setText(_elide(f"Canal : {documents.channel_name(layer)}", 26))
+        else:
+            self.name_label.setText(_elide(layer.name, 26))
         self.name_label.setToolTip(layer.name)
         data = layer.data
         shape = tuple(int(n) for n in data.shape)
@@ -1279,6 +1488,17 @@ def _type_text(dtype: np.dtype, rgb: bool) -> str:
     if np.issubdtype(dtype, np.floating):
         return f"{dtype.itemsize * 8} bits (réels)"
     return f"{dtype.itemsize * 8} bits"
+
+
+def _row(*widgets: QWidget) -> QWidget:
+    box = QWidget()
+    lay = QHBoxLayout(box)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(6)
+    for w in widgets:
+        lay.addWidget(w)
+    lay.addStretch(1)
+    return box
 
 
 def _elide(text: str, n: int) -> str:

@@ -291,6 +291,18 @@ class Microscope:
     def channel_names(self) -> list[str]:
         return [c.name for c in self.profile.channels]
 
+    @property
+    def channel_kind(self) -> str | None:
+        """Type du canal en place (« transmission », « fond noir », « fluorescence »…)."""
+        ch = self.profile.channel(self._channel) if self._channel else None
+        return ch.kind if ch is not None else None
+
+    def channel_issue(self) -> str | None:
+        """Ce qui empêche le canal en place de donner une bonne image avec l'objectif en
+        place (fond noir avec un objectif trop ouvert), ou None."""
+        ch = self.profile.channel(self._channel) if self._channel else None
+        return ch.objective_issue(self.objective) if ch is not None else None
+
     def channel_preset(self, name: str) -> ChannelPreset:
         ch = self.profile.channel(name)
         if ch is None:
@@ -372,6 +384,10 @@ class Microscope:
             objective_na=obj.na if obj else None,
             channel=self._channel,
         )
+        preset = self.profile.channel(self._channel) if self._channel else None
+        if preset is not None:
+            md.contrast = preset.kind
+            md.channel_color = preset.color
         if self.xy_stage is not None:
             md.x_um, md.y_um = self.xy_stage.get_position()
         if self.focus is not None:

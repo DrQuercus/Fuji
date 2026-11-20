@@ -40,8 +40,14 @@ def _compact_combo(combo: QComboBox, chars: int) -> None:
     combo.setMinimumContentsLength(chars)
 
 
+#: dernière ligne de la liste des canaux : ouvre l'éditeur de configuration
+ADD_CHANNEL = "＋ Ajouter un canal (fond noir…)"
+
+
 class MicroscopePanel(QWidget):
     message = Signal(str)
+    #: « Ajouter un canal » choisi dans la liste des canaux
+    add_channel_requested = Signal()
 
     def __init__(self, microscope: Microscope, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -125,7 +131,7 @@ class MicroscopePanel(QWidget):
             grid.addWidget(self.gain, 2, 1)
         lay.addLayout(grid)
         if caps["auto_white_balance"]:
-            wb = button("Balance des blancs")
+            self.wb_btn = wb = button("Balance des blancs")
             wb.setToolTip("Sur une zone vide de la lame : le fond devient neutre")
             wb.clicked.connect(self._white_balance)
             lay.addWidget(wb)
@@ -188,6 +194,9 @@ class MicroscopePanel(QWidget):
         if m.profile.channels:
             self.channel = QComboBox()
             self.channel.addItems(m.channel_names)
+            self.channel.insertSeparator(self.channel.count())
+            self.channel.addItem(ADD_CHANNEL)
+            self.channel.activated.connect(self._channel_activated)
             _compact_combo(self.channel, 8)
             if m.channel:
                 self.channel.setCurrentText(m.channel)
@@ -197,7 +206,61 @@ class MicroscopePanel(QWidget):
             grid.addWidget(QLabel("Canal"), r, 0)
             grid.addWidget(row(self.channel, apply, stretch_last=False), r, 1)
         lay.addLayout(grid)
+        # ce qu'il faut savoir sur le canal en place (fond noir : réglages, objectifs permis)
+        self.channel_note = QLabel()
+        self.channel_note.setWordWrap(True)
+        self.channel_note.setObjectName("hint")
+        self.channel_note.hide()
+        lay.addWidget(self.channel_note)
         return box
+
+    def _channel_activated(self, index: int) -> None:
+        if self.channel.itemText(index) != ADD_CHANNEL:
+            return
+        self.channel.setCurrentText(self.m.channel or self.m.channel_names[0])
+        self.add_channel_requested.emit()
+
+    def channel_advice(self) -> tuple[str, bool]:
+        """Le texte sous le canal, et s'il s'agit d'un avertissement."""
+        m = self.m
+        issue = m.channel_issue()
+        if issue:
+            return issue, True
+        if m.channel_kind != "fond noir":
+            return "", False
+        preset = m.profile.channel(m.channel or "")
+        limit = preset.objective_limit() if preset is not None else None
+        oil = (
+            " ; une goutte d'huile entre le condenseur et la lame"
+            if preset and preset.immersion_condenser
+            else ""
+        )
+        top = f" Objectifs jusqu'à une ouverture de {number(limit)}." if limit else ""
+        return (
+            "Fond noir : diaphragme d'ouverture du condenseur grand ouvert, condenseur remonté "
+            f"contre la lame{oil}, lampe à fond.{top} Balance des blancs : en fond clair.",
+            False,
+        )
+
+    def _sync_channel_note(self) -> None:
+        if not hasattr(self, "channel_note"):
+            return
+        text, warning = self.channel_advice()
+        name = "warning" if warning else "hint"
+        if self.channel_note.text() != text or self.channel_note.objectName() != name:
+            self.channel_note.setText(text)
+            self.channel_note.setObjectName(name)
+            self.channel_note.style().unpolish(self.channel_note)
+            self.channel_note.style().polish(self.channel_note)
+        self.channel_note.setVisible(bool(text))
+        if hasattr(self, "wb_btn"):  # pas de fond blanc en fond noir ni en fluorescence
+            plain = self.m.channel_kind in (None, "transmission")
+            self.wb_btn.setEnabled(plain)
+            self.wb_btn.setToolTip(
+                "Sur une zone vide de la lame : le fond devient neutre"
+                if plain
+                else "À faire en fond clair : ici, le fond n'est pas blanc"
+            )
 
     def _on_objective(self, label: str) -> None:
         try:
@@ -373,6 +436,7 @@ class MicroscopePanel(QWidget):
             and not self.channel.view().isVisible()
         ):
             self.channel.setCurrentText(m.channel)
+        self._sync_channel_note()
         for light, cb, slider in getattr(self, "_light_widgets", []):
             cb.blockSignals(True)
             cb.setChecked(light.is_on())

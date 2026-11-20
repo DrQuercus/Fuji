@@ -30,6 +30,8 @@ from qtpy.QtWidgets import (
 
 from fuji.core import catalog
 from fuji.core.profile import (
+    CHANNEL_KIND_NAMES,
+    CHANNEL_KINDS,
     CONTRASTS,
     CORRECTIONS,
     IMMERSIONS,
@@ -943,6 +945,8 @@ class ChannelsPage(Page):
         tools.setSpacing(4)
         add = button("Ajouter", "plus", primary=True)
         add.clicked.connect(self._add)
+        dark = button("Fond noir", "plus", tooltip="Ajouter un canal de fond noir prêt à l'emploi")
+        dark.clicked.connect(self._add_dark_field)
         dup = icon_button("copy", "Dupliquer", object_name="")
         dup.clicked.connect(self._duplicate)
         rm = icon_button("trash", "Supprimer", object_name="")
@@ -955,6 +959,7 @@ class ChannelsPage(Page):
         for b in (dup, rm, up, down):
             tools.addWidget(b)
         left.addLayout(tools)
+        left.addWidget(dark)
         row.addLayout(left)
         self.detail_host = QVBoxLayout()
         row.addLayout(self.detail_host, 1)
@@ -1023,6 +1028,18 @@ class ChannelsPage(Page):
         self._refresh(len(self._channels()) - 1)
         self.changed.emit()
 
+    def _add_dark_field(self) -> None:
+        """Canal de fond noir prêt à l'emploi (et le condenseur à régler, s'il manque)."""
+        self._commit()
+        done = M.setup_dark_field(self._data)
+        if not done:
+            row = next(i for i, c in enumerate(self._channels()) if c.get("kind") == "fond noir")
+            self._refresh(row)
+            return
+        self._refresh(len(self._channels()) - 1)
+        self.changed.emit()
+        QMessageBox.information(self, "Fond noir", "\n".join(f"• {line}" for line in done))
+
     def _duplicate(self) -> None:
         self._commit()
         row = self.list.currentRow()
@@ -1070,7 +1087,10 @@ class ChannelsPage(Page):
         card = Card("Canal", icon_name="channels")
         form = QFormLayout()
         name = QLineEdit(ch["name"])
-        kind = _combo(("transmission", "fluorescence", "réflexion"), ch.get("kind", "transmission"))
+        kind = QComboBox()
+        for value in CHANNEL_KINDS:
+            kind.addItem(CHANNEL_KIND_NAMES[value], value)
+        kind.setCurrentIndex(max(0, kind.findData(ch.get("kind", "transmission"))))
         sets = [f["name"] for f in data.get("filter_sets", [])]
         fset = _combo(tuple(sets), ch.get("filter_set"), allow_none=True) if sets else None
         exposure = _opt_spin(
@@ -1090,6 +1110,27 @@ class ChannelsPage(Page):
         form.addRow("", default)
         card.add(layout=form)
         v.addWidget(card)
+
+        # fond noir : jusqu'à quelle ouverture d'objectif le fond reste noir
+        dark = Card(
+            "Fond noir",
+            icon_name="objective",
+            subtitle="Le fond n'est noir que si l'objectif est moins ouvert que l'éclairage du "
+            "condenseur. Valeur gravée sur le condenseur de fond noir, ou dans sa notice.",
+        )
+        dform = QFormLayout()
+        max_na = _opt_spin(
+            ch.get("max_objective_na"), 0, 1.6, decimals=2, step=0.05, none_text="selon le condenseur"
+        )
+        max_na.setToolTip("Vide : 0,65 avec un condenseur à sec, 1,0 avec un condenseur à immersion")
+        immersion = QCheckBox("Condenseur à immersion (huile entre condenseur et lame)")
+        immersion.setChecked(bool(ch.get("immersion_condenser")))
+        dform.addRow("Ouverture maximale de l'objectif", max_na)
+        dform.addRow("", immersion)
+        dark.add(layout=dform)
+        v.addWidget(dark)
+        kind.currentIndexChanged.connect(lambda *_: dark.setVisible(kind.currentData() == "fond noir"))
+        dark.setVisible(kind.currentData() == "fond noir")
 
         # longueurs d'onde
         wl = Card("Longueurs d'onde", icon_name="bulb")
@@ -1173,7 +1214,7 @@ class ChannelsPage(Page):
             fs = next((f for f in data.get("filter_sets", []) if f["name"] == text), None)
             if fs is None:
                 return
-            kind.setCurrentText("fluorescence")
+            kind.setCurrentIndex(kind.findData("fluorescence"))
             if fs.get("excitation_nm"):
                 ex.setValue(float(fs["excitation_nm"]))
             if fs.get("emission_nm"):
@@ -1194,7 +1235,9 @@ class ChannelsPage(Page):
             if new_name != old_name and any(c["name"] == new_name for c in self._channels()):
                 new_name = old_name
             M.rename_channel(data, old_name, new_name)
-            ch["kind"] = kind.currentText()
+            ch["kind"] = kind.currentData()
+            ch["max_objective_na"] = _spin_value(max_na)
+            ch["immersion_condenser"] = immersion.isChecked()
             ch["filter_set"] = None if fset is None or fset.currentText() == "—" else fset.currentText()
             ch["exposure_ms"] = _spin_value(exposure)
             ch["gain"] = _spin_value(gain)

@@ -48,6 +48,14 @@ devices:
     label: Halogène 12 V 100 W
     driver: manual.light
 
+  # Le condenseur (tourelle ou diaphragme de fond noir) : Fuji dit quand le tourner.
+  # À ADAPTER : noms des positions de ta tourelle (ex. « Fond clair », « Fond noir », « Ph2 »).
+  - name: condenseur
+    label: Condenseur
+    driver: manual.state
+    options:
+      labels: [Fond clair, Fond noir]
+
 roles:
   camera: camera
   objective_changer: objectifs
@@ -66,7 +74,18 @@ channels:
   - name: Fond clair
     kind: transmission
     exposure_ms: 20
+    states: {condenseur: Fond clair}
     lights: {lampe: {on: true}}
+
+  # Fond noir : lampe à fond, diaphragme d'ouverture du condenseur grand ouvert.
+  # À ADAPTER : max_objective_na = ouverture au-delà de laquelle le fond n'est plus noir
+  # (vide : 0,65 avec un condenseur à sec ; mettre immersion_condenser: true pour un
+  # condenseur de fond noir à huile).
+  - name: Fond noir
+    kind: fond noir
+    exposure_ms: 200
+    states: {condenseur: Fond noir}
+    lights: {lampe: {on: true, intensity: 100}}
 
   # Plus tard, avec un Ploemopak (fluorescence) : déclarer les cubes et la lampe
   # dans « devices » (driver manual.state / manual.light), puis par exemple :

@@ -297,6 +297,68 @@ def setup_fluorescence(data: dict[str, Any]) -> list[str]:
     return done
 
 
+DARK_FIELD = "Fond noir"
+
+
+def _condenser(data: dict[str, Any]) -> dict[str, Any] | None:
+    """Le périphérique « condenseur » (tourelle, porte-diaphragme), s'il y en a un."""
+    for d in devices(data):
+        text = f"{d.get('name', '')} {d.get('label', '')}".lower()
+        if "condens" in text and (driver_info(d["driver"]) or _NO).kind == "state":
+            return d
+    return None
+
+
+def setup_dark_field(data: dict[str, Any]) -> list[str]:
+    """Prépare le fond noir : un canal « Fond noir » (lampe à fond, exposition plus longue)
+    et, pour le réglage du condenseur, une tourelle à deux positions. Renvoie ce qui a été
+    fait (rien si le canal existe déjà)."""
+    done: list[str] = []
+    channels = data.setdefault("channels", [])
+    if any(c.get("kind") == "fond noir" for c in channels):
+        return done
+    condenser = _condenser(data)
+    if condenser is None:
+        condenser = {
+            "name": unique_name(data, "condenseur"),
+            "label": "Condenseur",
+            "driver": "manual.state",
+            "options": {"labels": ["Fond clair", DARK_FIELD]},
+        }
+        devices(data).append(condenser)
+        done.append(f"Condenseur « {condenser['name']} » créé (manuel : Fuji vous dira quand le tourner).")
+    labels = list((condenser.setdefault("options", {}).get("labels")) or [])
+    dark = next((lbl for lbl in labels if "noir" in lbl.lower() or "dark" in lbl.lower()), None)
+    if dark is None and labels:
+        dark = DARK_FIELD
+        condenser["options"]["labels"] = [*labels, dark]
+        done.append(f"Position « {dark} » ajoutée au condenseur.")
+    dark = dark or DARK_FIELD
+    bright = next((lbl for lbl in labels if lbl != dark), None)
+    name = DARK_FIELD if not any(c["name"] == DARK_FIELD for c in channels) else f"{DARK_FIELD} 2"
+    channel: dict[str, Any] = {
+        "name": name,
+        "kind": "fond noir",
+        "exposure_ms": 200.0,
+        "states": {condenser["name"]: dark},
+        "color": "gray",
+    }
+    for key in ("cubes",):  # fluorescence : le cube vide, comme en fond clair
+        cubes = device(data, key)
+        if cubes is not None and "Vide" in (state_labels(data, key) or []):
+            channel["states"][key] = "Vide"
+    lamp = (data.get("roles") or {}).get("transmitted_light")
+    if lamp:
+        channel["lights"] = {lamp: {"on": True, "intensity": 100.0}}
+    channels.append(channel)
+    done.append(f"Canal « {name} » créé : lampe à fond, exposition 200 ms, objectifs jusqu'à ON 0,65.")
+    if bright:  # revenir en fond clair remet le condenseur en place
+        for ch in channels:
+            if ch.get("kind", "transmission") == "transmission":
+                ch.setdefault("states", {}).setdefault(condenser["name"], bright)
+    return done
+
+
 def save_path_for(data: dict[str, Any], current: Path | None) -> Path:
     """Où enregistrer : le fichier utilisateur existant, sinon un nouveau fichier utilisateur."""
     if current is not None and not is_builtin_profile(current):

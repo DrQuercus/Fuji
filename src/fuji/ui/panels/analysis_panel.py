@@ -1082,14 +1082,15 @@ class AnalysisPanel(QWidget):
         if preview:
             self._show_preview(items, offset, doc, source)
             return
-        shown = source is None or bool(source.visible)  # une autre image est affichée entre-temps
+        # une autre image est affichée entre-temps : le résultat attend avec la sienne
+        shown = doc is None or documents.shown(self.viewer) in (doc, None)
         for item in items:
             if isinstance(item, Table):
                 self.table_ready.emit(item)
                 continue
             layer = self._add_layer(item, offset, "", doc, like=source)
             if layer is not None and not shown:
-                layer.visible = False  # il attend avec son image, sans se poser sur une autre
+                documents.hide_layer(layer)  # il reparaîtra avec son image
         self.message.emit(f"{op.name} : terminé")
         if self.preview.isChecked():  # le résultat est là : l'aperçu n'a plus rien à montrer
             self.preview.setChecked(False)

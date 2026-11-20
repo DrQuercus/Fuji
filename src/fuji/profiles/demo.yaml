@@ -1,8 +1,8 @@
-# Microscope simulé : tout est motorisé, avec fond clair et fluorescence.
+# Microscope simulé : tout est motorisé, avec fond clair, fond noir et fluorescence.
 # Idéal pour découvrir Fuji sans matériel et tester les assistants.
 name: Démo (microscope simulé)
 description: >-
-  Microscope droit simulé, motorisé, caméra couleur. Fond clair (halogène) et
+  Microscope droit simulé, motorisé, caméra couleur. Fond clair et fond noir (halogène),
   fluorescence (LED 365 / 470 nm). Les molettes du microscope (diaphragme de champ,
   condenseur...) se règlent dans les propriétés de la caméra, catégorie « Simulation ».
 camera_adapter_magnification: 1.0
@@ -24,6 +24,11 @@ devices:
     driver: demo.state
     options:
       labels: [Vide, DAPI, GFP]
+  - name: condenseur
+    label: Condenseur
+    driver: demo.state
+    options:
+      labels: [Fond clair, Fond noir]
   - name: lampe
     label: Halogène (transmission)
     driver: demo.light
@@ -45,6 +50,7 @@ devices:
       height: 768
       bit_depth: 12
       sensor_pixel_size_um: 2.9
+      condenser: condenseur
       fluorescence:
         led_365: {structure: noyaux, emission_rgb: [0.25, 0.45, 1.0]}
         led_470: {structure: cytoplasme, emission_rgb: [0.15, 1.0, 0.3]}
@@ -66,8 +72,13 @@ channels:
   - name: Fond clair
     kind: transmission
     exposure_ms: 10
-    states: {cubes: Vide}
+    states: {cubes: Vide, condenseur: Fond clair}
     lights: {lampe: {on: true}}
+  - name: Fond noir
+    kind: fond noir
+    exposure_ms: 8
+    states: {cubes: Vide, condenseur: Fond noir}
+    lights: {lampe: {on: true, intensity: 100}}
   - name: DAPI
     kind: fluorescence
     exposure_ms: 80

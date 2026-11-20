@@ -258,56 +258,96 @@ def _layers(window):
     return [(ly.name, ly.visible) for ly in window.viewer.layers]
 
 
-def test_opening_an_image_replaces_the_open_one(window, qtbot):
+def test_opening_images_adds_tabs_and_keeps_the_others(window, qtbot):
+    """Ouvrir une image ne ferme plus celle qui est ouverte : chacune a son onglet."""
     gallery = _three_captures(window, qtbot)
     asked = []
     window._ask_close = lambda docs, lost, opening: asked.append(docs) or "close"
+    tabs = window.doc_tabs
     gallery.list.setCurrentRow(2)
     gallery.open_selected()
+    qtbot.wait(20)
     assert _layers(window) == [("capture_001", True)] and window.mode == "analyse"
+    assert not tabs.isHidden() and [tabs.tabText(i) for i in range(tabs.count())] == ["capture_001"]
     gallery.list.setCurrentRow(1)
-    gallery.open_selected()  # remplace, sans question : pas de résultat à perdre
-    assert _layers(window) == [("capture_002", True)] and asked == []
+    gallery.open_selected()  # à côté, sans question
+    qtbot.wait(20)
+    assert _layers(window) == [("capture_001", False), ("capture_002", True)] and asked == []
+    assert [tabs.tabText(i) for i in range(tabs.count())] == ["capture_001", "capture_002"]
+    assert tabs.currentIndex() == 1
+    # la liste marque les images ouvertes (en gras)
+    assert [gallery.list.item(i).font().bold() for i in range(3)] == [False, True, True]
 
-    # avec un résultat (masque) et une ROI : on demande ; « Annuler » ne change rien
+    # un résultat et une ROI : on passe d'une image à l'autre, chacune garde ses calques
     panel = window.analysis
     panel.select_operation("Seuillage automatique")
     panel._run()
     qtbot.waitUntil(lambda: not panel._busy, timeout=20000)
     panel.set_tool("shapes", "add_rectangle")
     window.viewer.layers["ROI"].add_rectangles([[10, 10], [40, 60]])
-    window._ask_close = lambda docs, lost, opening: asked.append((docs, opening)) or "cancel"
-    gallery.list.setCurrentRow(0)
-    gallery.open_selected()
-    assert asked == [(["capture_002"], True)]
-    assert [n for n, _ in _layers(window)] == ["capture_002", "capture_002 (masque Default)", "ROI"]
-
-    # « Garder ouverte » : la nouvelle image est seule visible, on passe de l'une à l'autre
-    window._ask_close = lambda docs, lost, opening: "keep"
-    gallery.open_selected()
-    assert _layers(window)[-1] == ("capture_003", True)
-    assert not window.viewer.layers["capture_002"].visible
-    assert not window.viewer.layers["capture_002 (masque Default)"].visible
+    mask = "capture_002 (masque Default)"
+    window.viewer.layers[mask].visible = False  # caché à la main : il le reste au retour
+    tabs.setCurrentIndex(0)
+    qtbot.wait(20)
+    assert window.viewer.layers["capture_001"].visible and not window.viewer.layers["capture_002"].visible
     assert window.viewer.layers["ROI"].visible  # les ROI sont communes, comme le ROI Manager
-    bar = window.display_bar
-    assert not bar.doc_combo.isHidden() and bar.name_label.isHidden()
-    assert [bar.doc_combo.itemData(i) for i in range(bar.doc_combo.count())] == ["capture_002", "capture_003"]
-    bar.doc_combo.activated.emit(0)
-    assert window.viewer.layers["capture_002"].visible and not window.viewer.layers["capture_003"].visible
-    assert bar.layer.name == "capture_002"
+    assert window.display_bar.layer.name == "capture_001"
+    tabs.setCurrentIndex(1)
+    qtbot.wait(20)
+    assert window.viewer.layers["capture_002"].visible and not window.viewer.layers[mask].visible
     # rouvrir une image déjà ouverte la remontre, sans la dupliquer
-    gallery.list.setCurrentRow(0)
+    gallery.list.setCurrentRow(2)
     gallery.open_selected()
-    assert window.viewer.layers["capture_003"].visible and len(window.viewer.layers) == 4
+    qtbot.wait(20)
+    assert tabs.count() == 2 and tabs.currentIndex() == 0 and window.viewer.layers["capture_001"].visible
+    # plusieurs images choisies : chacune son onglet, la dernière affichée
+    gallery.list.selectAll()
+    gallery.open_selected()
+    qtbot.wait(20)
+    assert [tabs.tabText(i) for i in range(tabs.count())] == ["capture_001", "capture_002", "capture_003"]
+    assert window.viewer.layers["capture_003"].visible and asked == []
 
-    # « Fermer » : l'image affichée et ses résultats ; la dernière emporte les ROI
-    window._ask_close = lambda docs, lost, opening: "close"
-    window.show_document("capture_002")
-    bar.close_btn.click()
-    assert [n for n, _ in _layers(window)] == ["ROI", "capture_003"]
-    assert window.viewer.layers["capture_003"].visible and bar.name_label.text() == "capture_003"
-    window.close_image()  # Ctrl+W
-    assert len(window.viewer.layers) == 0 and bar.name_label.text() == "Aucune image"
+    # « Fermer » (la croix de l'onglet) : l'image et ses résultats ; une image cachée se
+    # ferme sans changer l'image affichée
+    window.close_image("capture_002")
+    qtbot.wait(20)
+    assert asked == [["capture_002"]] and mask not in window.viewer.layers
+    assert window.viewer.layers["capture_003"].visible and tabs.count() == 2
+    window.close_all_images()
+    qtbot.wait(20)
+    assert len(window.viewer.layers) == 0 and tabs.isHidden()
+    assert window.display_bar.name_label.text() == "Aucune image"
+
+
+def test_same_name_from_another_day_and_many_open_images(window, qtbot, tmp_path):
+    """Deux « capture_001 » de jours différents s'ouvraient comme une seule image ; au-delà
+    de douze images ouvertes, la plus ancienne sans résultat se referme."""
+    import numpy as np
+
+    from fuji.io.ome_tiff import save_image
+    from fuji.ui import documents
+
+    gallery = _three_captures(window, qtbot)
+    gallery.list.setCurrentRow(2)
+    gallery.open_selected()
+    other = tmp_path / "2026-01-02"
+    other.mkdir()
+    old = other / "capture_001.ome.tif"
+    save_image(old, np.full((60, 80), 500, np.uint16), pixel_size_um=0.5)
+    window.open_paths([str(old)])
+    qtbot.wait(20)
+    docs = documents.documents(window.viewer)
+    assert docs == ["capture_001", "capture_001 (2)"]
+    assert window.viewer.layers["capture_001 (2)"].data.shape == (60, 80)
+    window.open_paths([str(old)])  # déjà ouverte : remontrée, pas rouverte
+    assert len(documents.documents(window.viewer)) == 2
+    for i in range(documents.MAX_OPEN):
+        path = tmp_path / f"image_{i}.tif"
+        save_image(path, np.full((20, 30), i, np.uint16))
+        window.open_paths([str(path)])
+    docs = documents.documents(window.viewer)
+    assert len(docs) == documents.MAX_OPEN and "capture_001" not in docs  # la plus ancienne
+    assert docs[-1] == f"image_{documents.MAX_OPEN - 1}"
 
 
 def test_close_asks_only_when_results_would_be_lost(window, qtbot, monkeypatch):

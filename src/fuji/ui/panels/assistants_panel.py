@@ -106,6 +106,25 @@ class _LiveAssistant(QWidget):
 
 
 # ------------------------------------------------------------------- Köhler
+def _bright_field(widget: QWidget, what: str) -> bool:
+    """Vrai en fond clair. Sinon, explique qu'il faut y passer (fond noir, fluorescence :
+    pas de champ éclairé uniforme à regarder)."""
+    m = widget.m  # type: ignore[attr-defined]
+    kind = getattr(m, "channel_kind", None)
+    if kind in (None, "transmission"):
+        return True
+    from fuji.core.profile import CHANNEL_KIND_NAMES
+
+    QMessageBox.information(
+        widget,
+        "Fond clair",
+        f"{what} se fait en fond clair : ici le canal est « {m.channel} » "
+        f"({CHANNEL_KIND_NAMES.get(kind, kind).lower()}).\n\nPassez en fond clair (Contrôle → "
+        "Optique → Canal), faites le réglage, puis revenez à votre canal : il vaut pour tous.",
+    )
+    return False
+
+
 class KohlerWidget(_LiveAssistant):
     def __init__(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
         super().__init__(*args, **kwargs)
@@ -148,6 +167,8 @@ class KohlerWidget(_LiveAssistant):
             self.toggle.setText("Démarrer l'assistant")
             self._clear_overlay()
         else:
+            if not _bright_field(self, "Le réglage de Köhler"):
+                return
             obj = self.m.objective
             self.assistant.objective_na = obj.na if obj else None
             self.assistant.reset()
@@ -531,6 +552,8 @@ class IlluminationWidget(QWidget):
         self.reference.shutdown()
 
     def _uniformity(self) -> None:
+        if not _bright_field(self, "L'analyse de l'éclairage"):
+            return
         try:
             frame = self.m.snap().data
         except Exception as exc:

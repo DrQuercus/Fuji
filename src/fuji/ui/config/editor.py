@@ -116,6 +116,13 @@ class ConfigEditor(QDialog):
         self._go(0)
 
     # ------------------------------------------------------------ navigation
+    def show_page(self, name: str) -> None:
+        """Ouvre une page par le nom de sa classe (« ChannelsPage »…)."""
+        for i, page in enumerate(self.pages):
+            if type(page).__name__ == name:
+                self.nav.setCurrentRow(i)
+                return
+
     def _go(self, index: int) -> None:
         if index < 0:
             return

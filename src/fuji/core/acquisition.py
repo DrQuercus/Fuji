@@ -270,8 +270,11 @@ def plan_acquisition(
     if sizes.get("z", 0) > 0 and focus is None:
         warnings.append("Une pile Z est demandée mais ce microscope n'a pas de mise au point déclarée.")
     for ch in sequence.channels:
-        if profile.channel(ch.config) is None:
+        preset = profile.channel(ch.config)
+        if preset is None:
             warnings.append(f"Canal inconnu dans ce profil : « {ch.config} ».")
+        elif preset.objective_issue(microscope.objective):  # fond noir et objectif trop ouvert
+            warnings.append(f"« {ch.config} » : {preset.objective_issue(microscope.objective)}")
     if (sequence.stage_positions or sequence.grid_plan is not None) and stage is None:
         warnings.append("Des positions XY sont demandées mais aucune platine n'est déclarée.")
     if manual:

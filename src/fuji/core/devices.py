@@ -210,9 +210,13 @@ class Camera(Device):
             return img
         return self._publish(img)
 
-    def auto_expose(self, target: float = 0.7, *, max_iterations: int = 8) -> float:
+    def auto_expose(self, target: float = 0.7, *, max_iterations: int = 8, sparse: bool = False) -> float:
         """Règle l'exposition pour que les hautes lumières atteignent ``target`` (fraction
         de la dynamique). Renvoie l'exposition choisie (ms).
+
+        ``sparse`` : quelques objets lumineux sur un fond noir (fond noir, fluorescence). Les
+        hautes lumières sont alors celles des tout derniers pixels (99,95 %) : avec le centile
+        habituel, c'est le fond que l'on amenait à 70 %, et les objets saturaient.
 
         Une image saturée ne dit pas de combien réduire, une image noire de combien
         augmenter : dans ces cas on corrige d'un facteur fixe, puis on vérifie sur une
@@ -225,7 +229,8 @@ class Camera(Device):
             if changed:
                 self.snap()  # image encore prise avec l'ancien réglage sur certaines caméras
             frame = self.snap()
-            p = float(np.percentile(frame[::4, ::4], 99.5))
+            sample = frame[::2, ::2] if sparse else frame[::4, ::4]
+            p = float(np.percentile(sample, 99.95 if sparse else 99.5))
             if p >= 0.98 * maxval:
                 factor = 0.25
             elif p <= 0.02 * maxval:
