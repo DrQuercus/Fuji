@@ -319,7 +319,7 @@ def test_opening_images_adds_tabs_and_keeps_the_others(window, qtbot):
     assert window.display_bar.name_label.text() == "Aucune image"
 
 
-def test_same_name_from_another_day_and_many_open_images(window, qtbot, tmp_path):
+def test_same_name_from_another_day_and_many_open_images(window, qtbot, tmp_path, monkeypatch):
     """Deux « capture_001 » de jours différents s'ouvraient comme une seule image ; au-delà
     de douze images ouvertes, la plus ancienne sans résultat se referme."""
     import numpy as np
@@ -341,12 +341,20 @@ def test_same_name_from_another_day_and_many_open_images(window, qtbot, tmp_path
     assert window.viewer.layers["capture_001 (2)"].data.shape == (60, 80)
     window.open_paths([str(old)])  # déjà ouverte : remontrée, pas rouverte
     assert len(documents.documents(window.viewer)) == 2
+    # supprimer la capture_001 d'aujourd'hui ne ferme pas celle de l'autre jour
+    from qtpy.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    gallery.list.clearSelection()
+    gallery.list.setCurrentRow(2)
+    gallery.delete_selected()
+    assert documents.documents(window.viewer) == ["capture_001 (2)"]
     for i in range(documents.MAX_OPEN):
         path = tmp_path / f"image_{i}.tif"
         save_image(path, np.full((20, 30), i, np.uint16))
         window.open_paths([str(path)])
     docs = documents.documents(window.viewer)
-    assert len(docs) == documents.MAX_OPEN and "capture_001" not in docs  # la plus ancienne
+    assert len(docs) == documents.MAX_OPEN and "capture_001 (2)" not in docs  # la plus ancienne
     assert docs[-1] == f"image_{documents.MAX_OPEN - 1}"
 
 

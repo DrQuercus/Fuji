@@ -1552,17 +1552,25 @@ class MainWindow(QMainWindow):
 
     def _on_images_deleted(self, infos: list[Any]) -> None:
         """Images supprimées de la liste : elles se ferment dans Analyse (sans question)."""
-        open_docs = documents.documents(self.viewer)
-        gone = [info.name for info in infos if info.name in open_docs]
+        # par leur fichier : une image du même nom, d'un autre jour, reste ouverte
+        gone = [doc for info in infos if (doc := documents.find_path(self.viewer, info.path))]
         if gone:
             self.analysis.leave()
             documents.close(self.viewer, gone)
 
     def _on_image_renamed(self, old: str, info: Any) -> None:
-        documents.rename(self.viewer, old, info.name)
-        for layer in documents.layers_of(self.viewer, info.name):
+        from fuji.io.captures import SUFFIX
+
+        doc = documents.find_path(self.viewer, info.path.with_name(f"{old}{SUFFIX}"))
+        if doc is None:
+            return
+        new = info.name if info.name not in documents.documents(self.viewer) else doc
+        if new != doc:
+            documents.rename(self.viewer, doc, new)
+        for layer in documents.layers_of(self.viewer, new):
             if documents.is_source(layer):
                 layer.metadata["source"] = str(info.path)
+        self._schedule_doc_tabs()
 
     def add_frame(
         self,
